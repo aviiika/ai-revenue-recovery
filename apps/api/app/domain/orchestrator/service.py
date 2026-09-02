@@ -27,6 +27,26 @@ from app.domain.interventions import service as interventions
 from app.domain.interventions.service import PaymentProvider, SimulatedProvider
 from app.domain.simulator import service as simulator
 
+
+def _default_provider() -> PaymentProvider:
+    """Use Razorpay test mode when credentials exist, else simulate.
+
+    Falling back rather than failing is deliberate: a fresh clone has no keys
+    and must still run the full loop (spec section 19). The import is local so
+    the domain layer takes no import-time dependency on httpx or the adapter.
+    """
+    try:
+        from app.core.config import get_settings
+        from app.integrations.razorpay.adapter import build_provider
+
+        live = build_provider(get_settings())
+        if live is not None:
+            return live
+    except ImportError:
+        pass
+    return SimulatedProvider()
+
+
 #: States from which a case can still be pushed forward.
 PENDING_STATES = (
     CaseState.NEW,
@@ -89,7 +109,7 @@ def run_batch(
     comparison — but never planned or executed. Withholding treatment is the
     entire point of the arm.
     """
-    active_provider = provider or SimulatedProvider()
+    active_provider = provider if provider is not None else _default_provider()
     result = BatchResult()
 
     pending = (

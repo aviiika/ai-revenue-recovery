@@ -45,6 +45,7 @@ from app.domain.enums import (
     OutcomeType,
     Recoverability,
     SourceType,
+    WebhookStatus,
 )
 
 # SQLAlchemy's dialect-agnostic UUID: native uuid on PostgreSQL, CHAR(32)
@@ -354,4 +355,49 @@ class RecoveryOutcome(Base):
         UniqueConstraint("external_event_id", name="outcome_external_event_id"),
         CheckConstraint("amount_recovered_paise >= 0", name="outcome_amount_non_negative"),
         Index("ix_recovery_outcomes_case", "recovery_case_id", "observed_at"),
+    )
+
+
+class WebhookEvent(Base):
+    """Raw inbound provider event (spec section 9, FR-1).
+
+    Razorpay delivers **at-least-once**, so the same event can arrive several
+    times; ``event_id`` is taken from the ``x-razorpay-event-id`` header, which
+    the docs state is unique per event, and carries a UNIQUE constraint. That is
+    what makes duplicate delivery a no-op rather than a double count.
+
+    The row is written *before* the event is interpreted, so an event that
+    crashes processing is still on record and can be replayed.
+    """
+
+    __tablename__ = "webhook_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False, default="razorpay")
+
+    # From x-razorpay-event-id. Falls back to a hash of the body when the header
+    # is absent, so dedup still works for replayed or hand-crafted deliveries.
+    event_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+
+    signature_valid: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    processing_status: Mapped[WebhookStatus] = mapped_column(
+        String(20), nullable=False, default=WebhookStatus.RECEIVED
+    )
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Redacted before write. Never contains the signature header or secrets.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONBType, nullable=False, default=dict)
+
+    recovery_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType, ForeignKey("recovery_cases.id", ondelete="SET NULL"), nullable=True
+    )
+    correlation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("provider", "event_id", name="webhook_provider_event_id"),
+        Index("ix_webhook_events_type", "event_type", "received_at"),
     )

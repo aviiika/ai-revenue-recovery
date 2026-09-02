@@ -103,6 +103,17 @@ class OutcomeType(StrEnum):
     CUSTOMER_DECLINED = "CUSTOMER_DECLINED"
 
 
+class WebhookStatus(StrEnum):
+    """Processing lifecycle of an inbound provider event."""
+
+    RECEIVED = "RECEIVED"  # stored, not yet interpreted
+    PROCESSED = "PROCESSED"  # applied to a case
+    IGNORED = "IGNORED"  # valid but not an event we act on
+    DUPLICATE = "DUPLICATE"  # already seen; at-least-once delivery
+    INVALID = "INVALID"  # signature verification failed
+    FAILED = "FAILED"  # processing raised
+
+
 class ExperimentArm(StrEnum):
     """Randomised assignment, for measuring incremental recovery.
 

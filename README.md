@@ -34,10 +34,11 @@ and is fully auditable, end to end.**
 | Interventions with DB-enforced idempotency and execution-time re-checks | Done |
 | Deterministic simulator, randomised holdout, incremental measurement | Done |
 | Agent vs baseline comparison; Celery worker wrapping the orchestrator | Done |
+| Razorpay test mode: Payment Links, webhook verification, dedup, health | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 173 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
-| Razorpay test mode, human review queue, LLM explanations | Not yet — see [Roadmap](#roadmap) |
+| 199 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| Human review queue, LLM explanations, demo hardening | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -202,6 +203,30 @@ The frontend performs no money arithmetic and holds no policy logic. Amounts
 arrive pre-formatted from the backend, and every state, rule and probability the
 UI shows was computed server-side.
 
+## Razorpay test mode
+
+The system runs fully without Razorpay credentials — the agent executes through
+the simulated provider. To exercise the real test-mode integration, set
+`RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in
+`apps/api/.env`. `RAZORPAY_MODE` must be `test`; the app refuses to boot
+otherwise.
+
+Check what is configured (credentials are never returned):
+
+```bash
+curl http://localhost:8000/api/v1/integrations/health
+```
+
+Webhooks arrive at `POST /api/v1/webhooks/razorpay`. Signature is verified as
+HMAC-SHA256 over the **raw** request body, duplicates are rejected via the
+`x-razorpay-event-id` header, and PII is redacted before the event is stored.
+Handled events: `payment.failed`, `payment_link.paid`, `subscription.charged`,
+`subscription.pending`, `subscription.halted`. Anything else is stored and
+acknowledged with a 200 — refusing it would make Razorpay retry for 24 hours.
+
+For local delivery you need a public HTTPS URL. Follow Razorpay's current
+guidance on tunnelling rather than assuming a particular tunnel domain works.
+
 ## Training the model
 
 ```bash
@@ -244,6 +269,8 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `POST` | `/api/v1/demo/run-batch` | One orchestration pass (gated) |
 | `POST` | `/api/v1/demo/simulate-outcomes` | Reveal deterministic outcomes (gated) |
 | `POST` | `/api/v1/demo/run-full-cycle` | Act → observe → retry to convergence (gated) |
+| `POST` | `/api/v1/webhooks/razorpay` | Signed webhook intake, deduplicated |
+| `GET` | `/api/v1/integrations/health` | Integration status; never returns credentials |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
 
@@ -289,9 +316,8 @@ These are not stylistic preferences; they are checked by tests.
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
-2. **Human review queue** — approve, override, stop, escalate
-3. **Demo hardening** — end-to-end tests, demo script, final metrics
+1. **Human review queue** — approve, override, stop, escalate
+2. **Demo hardening** — end-to-end tests, demo script, final metrics
 
 ## Licence and data
 

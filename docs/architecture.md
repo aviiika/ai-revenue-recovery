@@ -253,6 +253,44 @@ never had an attempt to exhaust.
 Together these moved the measured lift from **-35.7pp to +40.9pp** on the same
 data. Both regressions are now covered by tests that assert the sign.
 
+## 6f. Razorpay integration
+
+Implemented against the current Razorpay documentation rather than from memory,
+as the spec requires. Four documented facts shape the design, and each one
+changes the code:
+
+| Documented fact | Consequence here |
+|---|---|
+| Signature is HMAC-SHA256 over the **raw body**; "do not parse or cast" it | The handler reads `await request.body()` before any JSON parsing and verifies those exact bytes. A test proves a round-tripped body fails verification. |
+| Delivery is **at-least-once**; `x-razorpay-event-id` is unique per event | That header is stored with a UNIQUE constraint. A redelivery is acknowledged and does nothing. |
+| Endpoint must return **2xx within 5s**, else retried for 24h then disabled | The event is persisted first and processing is bounded. An unrecognised event returns 200, not an error — refusing it would earn 24 hours of retries. |
+| Amounts are in the smallest currency unit (paise) | No conversion at the boundary; Razorpay's unit is already ours. |
+
+Entity paths are the documented ones (`payload.payment.entity`,
+`payload.payment_link.entity`, `payload.subscription.entity`), and the event
+names are taken verbatim: `payment.failed`, `payment_link.paid`,
+`subscription.charged`, `subscription.pending`, `subscription.halted`.
+
+**Signature verification is implemented directly**, not through the SDK helper,
+so the security property is visible and testable in our own code. It uses
+`hmac.compare_digest` — a plain `==` on a hex digest leaks timing information
+that can be used to forge a signature byte by byte.
+
+**Defence in depth on double-counting.** Event-id dedup stops a redelivery, and
+`_apply_recovery` independently refuses a case already in `RECOVERED`. Verified
+live: two recovery events with *different* event ids credited the money once.
+
+**PII never reaches storage.** Razorpay payment entities carry `email`,
+`contact` and card details. None of it is needed to recover a payment, so the
+payload is redacted before the row is written; diagnostic fields like
+`error_reason` survive.
+
+**The adapter only calls Razorpay for payment links.** Messaging strategies stay
+simulated, and `notify` is explicitly `{sms: false, email: false}` so the
+provider never contacts a real person on our behalf. Without credentials
+`build_provider` returns `None` and the orchestrator falls back to the simulator
+— the normal state of a fresh clone.
+
 ## 7. Idempotency
 
 Two layers, both already in place:
@@ -349,6 +387,11 @@ Named honestly rather than left to be discovered:
   small sample and with no confidence interval. The API ships the caveat text
   alongside the number so the UI cannot render one without the other.
 - The holdout share is fixed at 20% and is not power-analysed.
+- No Razorpay subscription is created by this project; subscription webhooks are
+  handled but the recurring flow itself is not driven end to end.
+- Webhook processing runs inline. It is fast and well inside the 5-second
+  budget, but the durable record is the seam where it moves to the worker if it
+  ever grows.
 - The decision threshold (0.07) actions nearly every case, because the assumed
   intervention cost is small relative to the ticket. The policy engine's
   independent confidence floor is what actually restrains action.
