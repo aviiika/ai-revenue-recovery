@@ -106,6 +106,52 @@ humans in the UI and must never become a secret-leak vector.
 Rejected transitions are audited *before* the exception propagates. An attempt to do
 something illegal is exactly what an operator needs to be able to see afterwards.
 
+## 6a. The policy engine
+
+`domain/policies/engine.py` is a **pure function**: `(snapshot, scored, config) ->
+decision`. No database, no clock of its own, no I/O. That is not stylistic — it is
+what makes "the LLM cannot bypass the policy engine" a structural guarantee rather
+than a prompt instruction. There is no code path by which a model output reaches an
+action without passing through `decide()`.
+
+The 13 rules run in the fixed order of spec section 12. **Order is load-bearing.**
+`do_not_contact` is checked before expected value, so a large, high-confidence,
+obviously profitable case belonging to an opted-out customer is still stopped.
+That ordering has its own test, because getting it backwards would be a
+compliance failure that a naive test suite would never notice.
+
+Every decision carries the rules that fired (stable ids like
+`R02_DO_NOT_CONTACT`), the strategies that were blocked and why, and the full
+economics of every candidate. That payload goes into the audit trail, which is what
+makes spec FR-10 explainability achievable from stored data alone.
+
+**Deferral is not a transition.** A cooldown means "do not act yet", which is
+genuinely different from any state change. The engine expresses it as
+`next_state=None` and the evaluator performs no transition. The alternative —
+moving the case to `RETRY_ELIGIBLE` — was tried and rejected: the state machine
+correctly refused `SCORED -> RETRY_ELIGIBLE`, because FR-6 defines
+`RETRY_ELIGIBLE` as *acted, observed, may retry*, which a deferred case has not
+done. The state machine caught the modelling error; the fix belonged in the engine.
+
+## 6b. Scoring and the ML seam
+
+`domain/scoring/service.py` separates two things that are easy to conflate:
+
+* **Probability** is a model output, and uncertain.
+* **Expected value** is deterministic arithmetic over that probability, in integer
+  paise. Money is never computed by a model.
+
+`RecoveryScorer` is a Protocol. `DeterministicScorer` implements it today with an
+interpretable, monotone heuristic. When Milestone 2 lands a trained classifier, it
+implements the same Protocol and **no policy code changes**. The deterministic
+scorer is not scaffolding to delete — it is the permanent fallback for when the
+model artifact is missing, which the spec requires the demo to survive.
+
+Intervention costs are explicit per strategy, so the engine optimises expected
+*net* recovery. `ESCALATE_HUMAN` is by far the most expensive, because operator
+attention is the scarcest resource in a recovery operation and the system should
+not spend it casually.
+
 ## 7. Idempotency
 
 Two layers, both already in place:
@@ -198,8 +244,14 @@ other.
 
 Named honestly rather than left to be discovered:
 
-- No policy engine yet, so nothing currently drives a case past `NEW`. The state
-  machine supports the full loop; nothing calls it in anger.
+- No trained ML model yet; `DeterministicScorer` supplies probabilities. Its
+  numbers are heuristic priors, not learned from data, and should not be presented
+  as model performance.
+- Nothing executes an intervention yet. The loop stops at `ACTION_SELECTED`;
+  `ACTION_PENDING` onward arrives with the orchestrator in M4.
+- The "max reminders per 24h" rule is enforced structurally by the cooldown (at
+  most one action per window) rather than by counting reminders, because per-channel
+  counting needs the `Intervention` table that M4 introduces.
 - No authentication. Single seeded merchant only.
 - No worker, no queue usage. Redis is running but unused until M4.
 - No Razorpay calls of any kind yet. The mode gate exists; the adapter does not.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -13,17 +14,26 @@ from app.api.schemas import (
     AuditEventOut,
     BatchIngestRequest,
     BatchIngestResponse,
+    BlockedStrategyOut,
     CaseDetail,
     CaseListResponse,
     CaseSummary,
+    EvaluateBatchRequest,
+    EvaluateBatchResponse,
+    EvaluateResponse,
+    MoneyOut,
+    PolicyDecisionOut,
+    ScoredStrategyOut,
+    StopRequest,
 )
 from app.core.money import Money
 from app.db.models import Customer, Merchant, RecoveryCase
 from app.domain.audit import service as audit
+from app.domain.cases import evaluation, state_machine
 from app.domain.cases import service as cases
-from app.domain.cases import state_machine
 from app.domain.cases.service import DuplicateCaseError, NewCaseInput
 from app.domain.enums import CaseState, FailureCategory, SourceType
+from app.domain.policies.engine import PolicyDecision
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -153,6 +163,7 @@ def ingest_batch(
                     currency=item.currency,
                     do_not_contact=item.do_not_contact,
                     is_synthetic=item.is_synthetic,
+                    attempt_count=item.attempt_count,
                 ),
             )
         except DuplicateCaseError:
@@ -161,3 +172,139 @@ def ingest_batch(
         ingested += 1
 
     return BatchIngestResponse(ingested=ingested, duplicates=duplicates, failed=[])
+
+
+def _decision_out(decision: PolicyDecision) -> PolicyDecisionOut:
+    return PolicyDecisionOut(
+        recommended_strategy=decision.recommended_strategy,
+        next_state=decision.next_state,
+        deferred=decision.is_deferred,
+        requires_human=decision.requires_human,
+        explanation=decision.explanation,
+        expected_net_paise=decision.expected_net.paise,
+        applied_rules=decision.applied_rules,
+        decisive_rule=decision.decisive_rule,
+        retry_after=decision.retry_after,
+        allowed=[
+            ScoredStrategyOut(
+                strategy=s.strategy,
+                probability=float(s.probability),
+                expected_gross=MoneyOut.of(s.expected_gross.paise),
+                cost=MoneyOut.of(s.cost.paise),
+                expected_net_paise=s.expected_net.paise,
+                model_version=s.model_version,
+            )
+            for s in decision.allowed
+        ],
+        blocked=[
+            BlockedStrategyOut(strategy=b.strategy, rule_id=b.rule_id, reason=b.reason)
+            for b in decision.blocked
+        ],
+    )
+
+
+@router.post("/{case_id}/evaluate", response_model=EvaluateResponse)
+def evaluate_case(case_id: uuid.UUID, session: Session = Depends(get_db)) -> EvaluateResponse:
+    """Run diagnose -> score -> policy for one case and apply the transition."""
+    try:
+        case = cases.get(session, case_id)
+    except cases.CaseNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    merchant = session.get(Merchant, case.merchant_id)
+    if merchant is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Case has no owning merchant"
+        )
+
+    try:
+        result = evaluation.evaluate(session, case, merchant, now=datetime.now(UTC))
+    except evaluation.NotEvaluableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    return EvaluateResponse(
+        case=CaseSummary.from_model(result.case),
+        decision=_decision_out(result.decision),
+        model_version=result.model_version,
+    )
+
+
+@router.post("/{case_id}/stop", response_model=CaseSummary)
+def stop_case(
+    case_id: uuid.UUID, payload: StopRequest, session: Session = Depends(get_db)
+) -> CaseSummary:
+    """Operator kill switch. Always available on a non-terminal case."""
+    try:
+        case = cases.get(session, case_id)
+    except cases.CaseNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    evaluation.stop(session, case, payload.reason, actor_id=payload.reviewer)
+    return CaseSummary.from_model(case)
+
+
+@router.post("/evaluate-batch", response_model=EvaluateBatchResponse)
+def evaluate_batch(
+    payload: EvaluateBatchRequest, session: Session = Depends(get_db)
+) -> EvaluateBatchResponse:
+    """Run the agent across every pending case.
+
+    This is the endpoint the demo drives: it turns a pile of ingested failures
+    into a set of policy-compliant decisions, and reports the aggregate.
+    """
+    merchant_id = _default_merchant_id(session)
+    merchant = session.get(Merchant, merchant_id)
+    if merchant is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Merchant missing")
+
+    pending = (
+        session.execute(
+            select(RecoveryCase)
+            .where(
+                RecoveryCase.merchant_id == merchant_id,
+                RecoveryCase.current_state.in_(
+                    [CaseState.NEW, CaseState.DIAGNOSED, CaseState.SCORED]
+                ),
+            )
+            .order_by(RecoveryCase.detected_at)
+            .limit(payload.limit)
+        )
+        .scalars()
+        .all()
+    )
+
+    now = datetime.now(UTC)
+    counters = {"action_selected": 0, "escalated": 0, "stopped": 0, "waiting": 0}
+    by_rule: dict[str, int] = {}
+    total_at_risk = Money.zero()
+    total_expected_net = 0
+
+    for case in pending:
+        result = evaluation.evaluate(session, case, merchant, now=now)
+        total_at_risk = total_at_risk + Money(case.amount_at_risk_paise)
+        total_expected_net += result.decision.expected_net.paise
+
+        for rule in result.decision.applied_rules:
+            by_rule[rule] = by_rule.get(rule, 0) + 1
+
+        if result.decision.is_deferred:
+            counters["waiting"] += 1
+        else:
+            match result.decision.next_state:
+                case CaseState.ACTION_SELECTED:
+                    counters["action_selected"] += 1
+                case CaseState.ESCALATED:
+                    counters["escalated"] += 1
+                case CaseState.STOPPED:
+                    counters["stopped"] += 1
+
+    return EvaluateBatchResponse(
+        evaluated=len(pending),
+        action_selected=counters["action_selected"],
+        escalated=counters["escalated"],
+        stopped=counters["stopped"],
+        waiting=counters["waiting"],
+        total_at_risk=MoneyOut.of(total_at_risk.paise),
+        total_expected_net_paise=total_expected_net,
+        by_rule=dict(sorted(by_rule.items())),
+    )

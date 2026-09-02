@@ -132,6 +132,9 @@ def seed(
                     customer_id=customer_ids.get(item.customer_external_ref),
                     do_not_contact=item.do_not_contact,
                     is_synthetic=True,
+                    # attempt_number is 1-based ("this is the Nth attempt"), so
+                    # prior attempts is one fewer.
+                    attempt_count=max(item.attempt_number - 1, 0),
                 ),
             )
         except DuplicateCaseError:

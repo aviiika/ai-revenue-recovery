@@ -222,7 +222,10 @@ def generate(
         tenure_days = int(rng.triangular(0, 1200, 240))
         prior_successes = rng.randint(0, 3) if tenure_days < 60 else rng.randint(0, 24)
         prior_failures = rng.randint(0, 6)
-        attempt_number = rng.choices([1, 2, 3], weights=[0.72, 0.20, 0.08])[0]
+        # A minority of cases arrive having already been retried upstream.
+        # Without this tail, the attempt-cap stopping rule could never fire on
+        # demo data and the guardrail would be untestable end to end.
+        attempt_number = rng.choices([1, 2, 3, 4, 5], weights=[0.62, 0.18, 0.10, 0.06, 0.04])[0]
         amount = _draw_amount_paise(rng, segment)
 
         source_type = "SUBSCRIPTION" if rng.random() < 0.38 else "PAYMENT"

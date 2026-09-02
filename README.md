@@ -25,9 +25,12 @@ and is fully auditable, end to end.**
 | Append-only audit trail with redaction + correlation IDs | Done |
 | Deterministic synthetic generator (fixed seed) | Done |
 | Case ingestion / list / detail APIs, idempotent batch | Done |
+| Policy engine: 13 rules, stopping rules, EV gates, cooldown, backoff | Done |
+| Recovery scoring with deterministic baseline + ML seam | Done |
+| Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 76 tests, ruff clean, mypy strict clean | Done |
-| Policy engine, ML scoring, interventions, Razorpay, dashboard | Not yet — see [Roadmap](#roadmap) |
+| 125 tests, ruff clean, mypy strict clean | Done |
+| Trained ML model, interventions, Razorpay, dashboard | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -101,8 +104,35 @@ Interactive API docs: <http://localhost:8000/docs>
 curl -X POST http://localhost:8000/api/v1/demo/seed -H "Content-Type: application/json" -d "{\"count\":120,\"reset\":true}"
 ```
 
-This creates 120 synthetic cases worth roughly ₹8.8 lakh at risk. The same seed
+This creates 120 synthetic cases worth roughly ₹8.9 lakh at risk. The same seed
 always produces the same cases, so the demo is reproducible.
+
+**7. Run the agent over the batch**
+
+```bash
+curl -X POST http://localhost:8000/api/v1/cases/evaluate-batch -H "Content-Type: application/json" -d "{\"limit\":200}"
+```
+
+Each case is diagnosed, scored, and put through the policy engine. A representative
+run on the default seed:
+
+```text
+at risk         : INR 8,90,932.32
+expected net    : INR 3,22,506.13
+action selected : 75
+escalated       : 39
+stopped         :  6
+
+R02_DO_NOT_CONTACT                6    opted-out customers, stopped regardless of value
+R04_MAX_ATTEMPTS_REACHED         11    attempt budget spent, handed to a human
+R05_HIGH_VALUE_LOW_CONFIDENCE     1    large ticket the agent will not touch alone
+R06_BELOW_CONFIDENCE_THRESHOLD   27    routed to a human
+R11_TRANSIENT_FAILURE_RETRY      28    retried
+R12_ACTIONABLE_FAILURE_CONTACT   47    payment link / alternate method
+```
+
+These figures are produced by the code, not hardcoded. Re-running with the same
+seed reproduces them exactly.
 
 ---
 
@@ -159,6 +189,9 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `GET` | `/api/v1/cases` | Filtered, paginated case list |
 | `GET` | `/api/v1/cases/{id}` | Case detail with audit trail and legal transitions |
 | `POST` | `/api/v1/cases/batch` | Idempotent batch ingestion |
+| `POST` | `/api/v1/cases/{id}/evaluate` | Run diagnose → score → policy on one case |
+| `POST` | `/api/v1/cases/{id}/stop` | Operator kill switch |
+| `POST` | `/api/v1/cases/evaluate-batch` | Run the agent across all pending cases |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
 
@@ -190,19 +223,23 @@ These are not stylistic preferences; they are checked by tests.
 - **Ingestion is idempotent** per `(merchant, source_external_id)`, so a redelivered
   webhook cannot double-count revenue.
 - **Deterministic mappings beat model guesses** where a reason code is known.
+- **The policy engine has final authority.** It is a pure function with no I/O; a
+  model ranks options and an LLM explains them, but neither can act.
+- **Opt-out is checked before economics**, so a profitable case belonging to an
+  opted-out customer is still stopped. This ordering is tested explicitly.
 - **Synthetic data is labelled everywhere** it appears, including in API responses.
 
 ## Roadmap
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **Policy engine** — stopping rules, cooldowns, do-not-contact, EV gates
-2. **ML baseline** — logistic regression, calibration, business-value thresholding
-3. **Dashboard** — Next.js, case table, audit timeline, KPI cards
-4. **Orchestrator + simulator** — intervention execution, batch runs, agent vs baseline
-5. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
-6. **Human review queue** — approve, override, stop, escalate
-7. **Demo hardening** — E2E tests, model card, demo script
+1. **ML baseline** — logistic regression, calibration, business-value
+   thresholding, swapped in behind the existing `RecoveryScorer` protocol
+2. **Dashboard** — Next.js, case table, audit timeline, KPI cards
+3. **Orchestrator + simulator** — intervention execution, batch runs, agent vs baseline
+4. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
+5. **Human review queue** — approve, override, stop, escalate
+6. **Demo hardening** — E2E tests, model card, demo script
 
 ## Licence and data
 

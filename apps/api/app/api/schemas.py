@@ -20,6 +20,7 @@ from app.domain.enums import (
     AuditEventType,
     CaseState,
     FailureCategory,
+    InterventionStrategy,
     Recoverability,
     SourceType,
 )
@@ -118,6 +119,7 @@ class NewCaseRequest(BaseModel):
     currency: str = Field(default="INR", min_length=3, max_length=3)
     do_not_contact: bool = False
     is_synthetic: bool = False
+    attempt_count: int = Field(default=0, ge=0, description="Attempts already made upstream.")
 
     @field_validator("detected_at")
     @classmethod
@@ -163,3 +165,65 @@ class HealthResponse(BaseModel):
     razorpay_mode: str
     llm_enabled: bool
     demo_endpoints_enabled: bool
+
+
+class ScoredStrategyOut(BaseModel):
+    """One candidate action with its economics, for the decision card."""
+
+    strategy: InterventionStrategy
+    probability: float
+    expected_gross: MoneyOut
+    cost: MoneyOut
+    expected_net_paise: int
+    model_version: str
+
+
+class BlockedStrategyOut(BaseModel):
+    strategy: InterventionStrategy
+    rule_id: str
+    reason: str
+
+
+class PolicyDecisionOut(BaseModel):
+    """Why the agent decided what it decided (spec FR-10 explainability)."""
+
+    recommended_strategy: InterventionStrategy
+    #: None when the engine deferred without changing the case (cooldown).
+    next_state: CaseState | None
+    deferred: bool
+    requires_human: bool
+    explanation: str
+    expected_net_paise: int
+    applied_rules: list[str]
+    decisive_rule: str | None
+    retry_after: datetime | None
+    allowed: list[ScoredStrategyOut]
+    blocked: list[BlockedStrategyOut]
+
+
+class EvaluateResponse(BaseModel):
+    case: CaseSummary
+    decision: PolicyDecisionOut
+    model_version: str
+
+
+class StopRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    reviewer: str | None = Field(default=None, max_length=120)
+
+
+class EvaluateBatchRequest(BaseModel):
+    limit: int = Field(default=200, ge=1, le=2000)
+
+
+class EvaluateBatchResponse(BaseModel):
+    """Aggregate outcome of running the agent over a batch."""
+
+    evaluated: int
+    action_selected: int
+    escalated: int
+    stopped: int
+    waiting: int
+    total_at_risk: MoneyOut
+    total_expected_net_paise: int
+    by_rule: dict[str, int]

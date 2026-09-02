@@ -63,6 +63,9 @@ class NewCaseInput:
     currency: str = "INR"
     do_not_contact: bool = False
     is_synthetic: bool = False
+    #: Attempts already made before this case reached us (e.g. gateway retries).
+    #: Counts against the merchant's automated attempt budget.
+    attempt_count: int = 0
 
 
 def ingest(session: Session, payload: NewCaseInput) -> RecoveryCase:
@@ -97,6 +100,7 @@ def ingest(session: Session, payload: NewCaseInput) -> RecoveryCase:
         recoverability=CATEGORY_RECOVERABILITY[payload.failure_category],
         detected_at=payload.detected_at,
         current_state=CaseState.NEW,
+        attempt_count=payload.attempt_count,
         do_not_contact=payload.do_not_contact,
         is_synthetic=payload.is_synthetic,
     )
@@ -118,6 +122,7 @@ def ingest(session: Session, payload: NewCaseInput) -> RecoveryCase:
             "failure_category": str(payload.failure_category),
             "failure_reason_code": payload.failure_reason_code,
             "is_synthetic": payload.is_synthetic,
+            "attempt_count": payload.attempt_count,
         },
     )
     return case

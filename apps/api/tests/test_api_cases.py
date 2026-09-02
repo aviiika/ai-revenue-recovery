@@ -149,3 +149,102 @@ def test_correlation_id_is_echoed(client: TestClient) -> None:
 def test_correlation_id_is_generated_when_absent(client: TestClient) -> None:
     response = client.get("/health")
     assert len(response.headers["X-Correlation-ID"]) == 32
+
+
+# --- Policy engine over HTTP ------------------------------------------------
+
+
+def test_evaluate_moves_case_to_action_selected(client: TestClient) -> None:
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
+
+    response = client.post(f"/api/v1/cases/{case_id}/evaluate")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["case"]["current_state"] == "ACTION_SELECTED"
+    assert body["decision"]["recommended_strategy"] == "WAIT_AND_RETRY"
+    assert body["decision"]["applied_rules"]
+    assert body["model_version"] == "deterministic-baseline-v1"
+
+
+def test_evaluate_exposes_the_full_decision_rationale(client: TestClient) -> None:
+    """Spec FR-10: the UI must be able to show why, not just what."""
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
+
+    decision = client.post(f"/api/v1/cases/{case_id}/evaluate").json()["decision"]
+
+    assert decision["explanation"].strip()
+    assert decision["allowed"], "candidate strategies with economics must be exposed"
+    for candidate in decision["allowed"]:
+        assert candidate["expected_gross"]["paise"] >= 0
+        assert candidate["cost"]["paise"] >= 0
+        assert 0.0 < candidate["probability"] < 1.0
+
+
+def test_evaluate_stops_a_do_not_contact_case(client: TestClient) -> None:
+    client.post(
+        "/api/v1/cases/batch",
+        json=batch_payload(source_external_id="pay_dnc_001", do_not_contact=True),
+    )
+    case_id = next(
+        item["id"]
+        for item in client.get("/api/v1/cases").json()["items"]
+        if item["source_external_id"] == "pay_dnc_001"
+    )
+
+    body = client.post(f"/api/v1/cases/{case_id}/evaluate").json()
+    assert body["case"]["current_state"] == "STOPPED"
+    assert body["decision"]["decisive_rule"] == "R02_DO_NOT_CONTACT"
+
+
+def test_evaluating_a_terminal_case_conflicts(client: TestClient) -> None:
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
+
+    client.post(f"/api/v1/cases/{case_id}/stop", json={"reason": "operator halted"})
+    response = client.post(f"/api/v1/cases/{case_id}/evaluate")
+    assert response.status_code == 409
+
+
+def test_stop_endpoint_records_the_reviewer(client: TestClient) -> None:
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    case_id = client.get("/api/v1/cases").json()["items"][0]["id"]
+
+    response = client.post(
+        f"/api/v1/cases/{case_id}/stop",
+        json={"reason": "customer disputed the charge", "reviewer": "ops@example"},
+    )
+    assert response.status_code == 200
+    assert response.json()["current_state"] == "STOPPED"
+
+    trail = client.get(f"/api/v1/cases/{case_id}").json()["audit_trail"]
+    human = [e for e in trail if e["actor_type"] == "HUMAN"]
+    assert human and human[0]["actor_id"] == "ops@example"
+
+
+def test_evaluate_batch_reports_aggregate_outcomes(client: TestClient) -> None:
+    client.post(
+        "/api/v1/cases/batch",
+        json={
+            "cases": [
+                batch_payload(source_external_id="pay_b1")["cases"][0],
+                batch_payload(source_external_id="pay_b2", do_not_contact=True)["cases"][0],
+                batch_payload(
+                    source_external_id="pay_b3",
+                    amount_at_risk_paise=100,
+                    failure_category="MANDATE_REVOKED",
+                )["cases"][0],
+            ]
+        },
+    )
+
+    body = client.post("/api/v1/cases/evaluate-batch", json={"limit": 100}).json()
+
+    assert body["evaluated"] == 3
+    assert body["action_selected"] >= 1
+    assert body["stopped"] >= 2  # the opt-out and the uneconomic case
+    assert body["total_at_risk"]["paise"] > 0
+    assert body["by_rule"], "aggregate must attribute outcomes to policy rules"
+    assert "R02_DO_NOT_CONTACT" in body["by_rule"]
