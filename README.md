@@ -29,10 +29,12 @@ and is fully auditable, end to end.**
 | Recovery scoring with deterministic baseline + ML seam | Done |
 | ML baseline: logistic regression, isotonic calibration, EV thresholding | Done |
 | Model card, leakage guards, graceful degradation | Done |
+| Overview + intervention metrics endpoints | Done |
+| Dashboard: overview, case table, case detail + audit timeline, model page | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 139 tests, ruff clean, mypy strict clean | Done |
-| Interventions, Razorpay, dashboard, human review | Not yet — see [Roadmap](#roadmap) |
+| 145 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| Interventions, Razorpay, human review queue | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -175,6 +177,28 @@ Lint and typecheck:
 cd apps/api && .venv/Scripts/python.exe -m ruff check app tests ../../ml && .venv/Scripts/python.exe -m mypy app
 ```
 
+## Running the dashboard
+
+With the API running, in a second terminal:
+
+```bash
+cd apps/web && npm install && npm run dev
+```
+
+Then open <http://localhost:3000>. Three screens:
+
+- **Overview** — KPI cards, recovery funnel, revenue at risk by failure reason,
+  detected-vs-recovered over time. Buttons to seed data and run the agent.
+- **Recovery cases** — filterable, paginated table with amount, diagnosis,
+  recovery probability, state and attempts.
+- **Case detail** — financial context, model assessment, operator actions, and
+  the complete append-only audit timeline.
+- **Model metrics** — the training report, including calibration.
+
+The frontend performs no money arithmetic and holds no policy logic. Amounts
+arrive pre-formatted from the backend, and every state, rule and probability the
+UI shows was computed server-side.
+
 ## Training the model
 
 ```bash
@@ -210,6 +234,8 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `POST` | `/api/v1/cases/{id}/evaluate` | Run diagnose → score → policy on one case |
 | `POST` | `/api/v1/cases/{id}/stop` | Operator kill switch |
 | `POST` | `/api/v1/cases/evaluate-batch` | Run the agent across all pending cases |
+| `GET` | `/api/v1/metrics/overview` | KPIs, funnel, failure reasons, time series |
+| `GET` | `/api/v1/metrics/interventions` | Per-strategy performance from the audit trail |
 | `GET` | `/api/v1/metrics/models` | Training report; `trained: false` when untrained |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
@@ -256,11 +282,12 @@ These are not stylistic preferences; they are checked by tests.
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **Dashboard** — Next.js, case table, audit timeline, KPI cards
-2. **Orchestrator + simulator** — intervention execution, batch runs, agent vs baseline
-3. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
-4. **Human review queue** — approve, override, stop, escalate
-5. **Demo hardening** — E2E tests, model card, demo script
+1. **Orchestrator + simulator** — intervention execution, batch runs,
+   agent vs baseline, and the randomised holdout that makes incremental
+   (rather than gross) recovery measurable
+2. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
+3. **Human review queue** — approve, override, stop, escalate
+4. **Demo hardening** — end-to-end tests, demo script, final metrics
 
 ## Licence and data
 

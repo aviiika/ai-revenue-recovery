@@ -29,6 +29,13 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "BLE", "DTZ"]
+ignore = [
+    # `Depends(...)` / `Query(...)` in a signature default IS the FastAPI
+    # dependency-injection idiom, so B008 fires on correct code. This config
+    # governs whole-repo linting (what CI runs), so it must stay in step with
+    # apps/api/pyproject.toml.
+    "B008",
+]
 
 [tool.ruff.lint.per-file-ignores]
 # X_train / X_test is the universal scikit-learn convention for a design matrix

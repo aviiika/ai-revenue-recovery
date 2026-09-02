@@ -169,6 +169,37 @@ Intervention costs are explicit per strategy, so the engine optimises expected
 attention is the scarcest resource in a recovery operation and the system should
 not spend it casually.
 
+## 6c. The dashboard
+
+Next.js 16 (App Router), TypeScript strict, Tailwind v4, TanStack Query,
+Recharts. Three rules shape it:
+
+**The frontend holds no domain logic.** It performs no money arithmetic — amounts
+arrive as `{ paise, formatted }` and the UI renders `formatted`. It does not
+decide which state transitions are legal; `allowed_transitions` comes off the
+wire. It does not evaluate policy; it renders the engine's own explanation and
+rule ids. This is the spec's "do not duplicate domain logic" rule applied
+literally.
+
+**State is never conveyed by colour alone.** Every status badge carries a text
+label, and terminal states additionally carry a heavier border, so the interface
+survives greyscale and colour-blindness. Focus rings are explicit.
+
+**Tailwind class names are never interpolated.** Tailwind extracts classes by
+scanning source text, so a name assembled at runtime is invisible to it and the
+style silently never ships — a bug that looks like a design mistake. Every tone
+variant is written out literally in a lookup map.
+
+The visual language is deliberately plain: dense tables, tabular figures aligned
+on the decimal, a muted palette. The spec rules out crypto-dashboard and
+gradient-heavy treatments, and an operations screen showing forty rows should
+not look like a warning light.
+
+A note on component sourcing: the 21st.dev catalog was searched for a dashboard
+shell and table, and the available options were consumer-fintech or
+marketing-styled rather than operations software. They were not adopted. The UI
+is built on the design tokens above instead.
+
 ## 7. Idempotency
 
 Two layers, both already in place:

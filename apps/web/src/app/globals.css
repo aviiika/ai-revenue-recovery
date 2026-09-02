@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens — financial operations software.
+
+   The spec is explicit about what this must NOT look like: no crypto dashboard,
+   no gaming UI, no gradient-heavy AI landing page. It should read like software
+   an operations team stares at for eight hours: dense, calm, high-contrast,
+   with state legible at a glance.
+
+   Two rules that shape everything below:
+   - State is never conveyed by colour alone (WCAG + spec). Every status badge
+     carries a text label, and several carry a shape/border distinction too.
+   - Money is tabular. Amounts align on the decimal so columns can be scanned
+     vertically without reading each figure.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Neutral ramp — the interface is mostly this. Slightly cool grey so the
+     semantic colours read as deliberate rather than decorative. */
+  --color-canvas: #f7f8fa;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f1f3f6;
+  --color-border: #dfe3e9;
+  --color-border-strong: #c3cad5;
+
+  --color-ink: #101725;
+  --color-ink-secondary: #4a5567;
+  --color-ink-muted: #6d7889;
+
+  /* Semantic states. Deliberately desaturated — an operations screen showing
+     forty rows should not look like a warning light. */
+  --color-risk: #9a3412;
+  --color-risk-surface: #fff4ed;
+  --color-risk-border: #fbd3ba;
+
+  --color-recovered: #14653c;
+  --color-recovered-surface: #eefaf3;
+  --color-recovered-border: #b6e5cb;
+
+  --color-escalated: #854d0e;
+  --color-escalated-surface: #fefbe8;
+  --color-escalated-border: #f5e3a3;
+
+  --color-stopped: #475569;
+  --color-stopped-surface: #f1f5f9;
+  --color-stopped-border: #cbd5e1;
+
+  --color-progress: #1e429f;
+  --color-progress-surface: #eff4ff;
+  --color-progress-border: #c3d4fd;
+
+  --color-accent: #1e429f;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas,
+    monospace;
+
+  /* Dense type scale. Operations tables need more rows per screen than a
+     marketing page needs breathing room. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Money and identifiers use tabular figures so digits align in columns. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Visible focus is a requirement, not a preference — the spec asks for
+   keyboard-accessible controls and WCAG-minded focus states. */
+:where(a, button, [role="button"], input, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* Respect reduced-motion; there is no decorative animation here anyway. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

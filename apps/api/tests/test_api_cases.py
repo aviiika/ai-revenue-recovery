@@ -256,3 +256,68 @@ def test_evaluate_batch_reports_aggregate_outcomes(client: TestClient) -> None:
     assert body["total_at_risk"]["paise"] > 0
     assert body["by_rule"], "aggregate must attribute outcomes to policy rules"
     assert "R02_DO_NOT_CONTACT" in body["by_rule"]
+
+
+# --- Metrics ----------------------------------------------------------------
+
+
+def test_overview_metrics_are_computed_not_hardcoded(client: TestClient) -> None:
+    """Spec: never hard-code fake metrics. Numbers must move with the data."""
+    empty = client.get("/api/v1/metrics/overview").json()
+    assert empty["kpis"]["total_cases"] == 0
+    assert empty["kpis"]["revenue_at_risk"]["paise"] == 0
+
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    after = client.get("/api/v1/metrics/overview").json()
+
+    assert after["kpis"]["total_cases"] == 1
+    assert after["kpis"]["revenue_at_risk"]["paise"] == 250000
+    assert after["kpis"]["revenue_at_risk"]["formatted"] == "INR 2,500.00"
+    assert after["synthetic"] is True
+
+
+def test_overview_reports_both_recovery_rates(client: TestClient) -> None:
+    """Count and value rates differ on a long-tailed population; show both."""
+    body = client.get("/api/v1/metrics/overview").json()["kpis"]
+    assert "recovery_rate_by_count" in body
+    assert "recovery_rate_by_value" in body
+
+
+def test_overview_includes_the_four_dashboard_charts(client: TestClient) -> None:
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    body = client.get("/api/v1/metrics/overview").json()
+
+    assert body["funnel"] and body["funnel"][0]["stage"] == "Detected"
+    assert body["by_state"]
+    assert body["by_failure_reason"]
+    assert body["over_time"]
+
+
+def test_funnel_is_monotonically_non_increasing(client: TestClient) -> None:
+    """A funnel where a later stage exceeds an earlier one is not a funnel."""
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    client.post("/api/v1/cases/evaluate-batch", json={"limit": 50})
+
+    funnel = client.get("/api/v1/metrics/overview").json()["funnel"]
+    counts = [int(stage["count"]) for stage in funnel]
+    assert counts == sorted(counts, reverse=True)
+
+
+def test_intervention_performance_reads_from_the_audit_trail(client: TestClient) -> None:
+    client.post("/api/v1/cases/batch", json=batch_payload())
+    client.post("/api/v1/cases/evaluate-batch", json={"limit": 50})
+
+    body = client.get("/api/v1/metrics/interventions").json()
+    assert body["interventions"]
+    row = body["interventions"][0]
+    assert row["strategy"]
+    assert row["selected"] >= 1
+    assert 0.0 <= row["success_rate"] <= 1.0
+
+
+def test_model_metrics_endpoint_reports_trained_state(client: TestClient) -> None:
+    body = client.get("/api/v1/metrics/models").json()
+    assert "trained" in body
+    # Whether trained or not, the synthetic flag must always be present so the
+    # UI can never render these numbers without the caveat.
+    assert body["synthetic"] is True
