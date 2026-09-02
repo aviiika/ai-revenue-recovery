@@ -1,0 +1,35 @@
+# Local development services for the AI Revenue Recovery Agent.
+# Compose v2+ ignores the obsolete top-level `version:` key, so it is omitted.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: revrec-postgres
+    environment:
+      POSTGRES_USER: revrec
+      POSTGRES_PASSWORD: revrec
+      POSTGRES_DB: revrec
+    ports:
+      - "5432:5432"
+    volumes:
+      - revrec-pgdata:/var/lib/postgresql/data
+      - ./infra/scripts/init-test-db.sql:/docker-entrypoint-initdb.d/10-init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revrec -d revrec"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: revrec-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  revrec-pgdata:

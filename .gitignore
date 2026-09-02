@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Environment / secrets  -- never commit real credentials
+.env
+.env.*
+!.env.example
+
+# ML artifacts (binaries are rebuilt from seeded generator + train script)
+ml/artifacts/*
+!ml/artifacts/.gitkeep
+ml/data/*.csv
+ml/data/*.parquet
+
+# Local databases
+*.db
+*.sqlite3
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

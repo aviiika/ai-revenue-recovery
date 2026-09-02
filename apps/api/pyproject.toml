@@ -1,0 +1,72 @@
+[project]
+name = "revrec-api"
+version = "0.1.0"
+description = "AI Revenue Recovery Agent - FastAPI backend (Razorpay Buildathon)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
+    "psycopg[binary]>=3.2",
+    "httpx>=0.28",
+    "python-json-logger>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "types-python-dateutil",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF", "BLE", "DTZ"]
+# BLE = flake8-blind-except: enforces the spec's "no bare except" rule.
+# DTZ = flake8-datetimez: enforces timezone-aware datetimes.
+ignore = [
+    # B008 forbids function calls in argument defaults. `Depends(...)` in a
+    # signature default IS the FastAPI dependency-injection idiom, so this rule
+    # fires on correct code. Kept off rather than littering per-line noqa.
+    "B008",
+]
+
+[tool.ruff.lint.isort]
+# Without this, isort treats the local packages as third-party and reorders
+# first-party imports into the wrong block.
+known-first-party = ["app", "ml", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+# The shared synthetic generator lives at the repo root (ml/), outside this
+# package, so mypy needs the root on its search path to resolve it.
+mypy_path = "../.."
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+# Domain and core carry the money/state invariants: no untyped escape hatches.
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = ["error::DeprecationWarning"]

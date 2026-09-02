@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Lint, typecheck and test only. No deploy step, per spec section 7 (DevOps).
+jobs:
+  backend:
+    name: Backend (lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    services:
+      # Tests run against real PostgreSQL in CI: JSONB behaviour and CHECK
+      # constraints are dialect-specific, and the local SQLite default would
+      # let some of them through unnoticed.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: revrec
+          POSTGRES_PASSWORD: revrec
+          POSTGRES_DB: revrec
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U revrec"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://revrec:revrec@localhost:5432/revrec
+      TEST_DATABASE_URL: postgresql+psycopg://revrec:revrec@localhost:5432/revrec_test
+      RAZORPAY_MODE: test
+      APP_ENV: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Create the test database
+        run: PGPASSWORD=revrec psql -h localhost -U revrec -d revrec -c "CREATE DATABASE revrec_test OWNER revrec;"
+
+      - name: Install
+        run: python -m pip install -e "apps/api[dev]" -e .
+
+      - name: Lint
+        run: python -m ruff check apps/api/app apps/api/tests ml
+
+      - name: Format check
+        run: python -m ruff format --check apps/api/app apps/api/tests ml
+
+      - name: Typecheck
+        run: python -m mypy app
+        working-directory: apps/api
+
+      - name: Migrations apply cleanly
+        run: python -m alembic upgrade head
+        working-directory: apps/api
+
+      - name: Test
+        run: python -m pytest -q
+        working-directory: apps/api

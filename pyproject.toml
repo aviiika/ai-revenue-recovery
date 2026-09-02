@@ -1,0 +1,27 @@
+[project]
+name = "revrec-ml"
+version = "0.1.0"
+description = "Shared synthetic data generation and ML pipeline for the AI Revenue Recovery Agent"
+requires-python = ">=3.12"
+# Runtime deps are deliberately empty: the synthetic generator uses only the
+# standard library, so the API can depend on it without pulling in the whole
+# scientific stack. pandas/scikit-learn arrive in the `train` extra at
+# Milestone 2, which is when anything actually needs them.
+dependencies = []
+
+[project.optional-dependencies]
+train = [
+    "pandas>=2.2",
+    "numpy>=2.1",
+    "scikit-learn>=1.5",
+    "joblib>=1.4",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# Explicit rather than auto-discovered: the repo root also holds apps/, docs/
+# and infra/, none of which are Python packages.
+packages = ["ml", "ml.src"]
