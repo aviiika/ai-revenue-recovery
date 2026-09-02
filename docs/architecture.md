@@ -200,6 +200,59 @@ shell and table, and the available options were consumer-fintech or
 marketing-styled rather than operations software. They were not adopted. The UI
 is built on the design tokens above instead.
 
+## 6d. Orchestration, interventions and the simulator
+
+**Intervention idempotency is a database guarantee.** The row is written before
+the provider is called, and `idempotency_key` — derived as
+`case:{id}:attempt:{n}`, never random — carries a UNIQUE constraint. Re-running
+a pass is refused by Postgres rather than by a caller remembering to check.
+
+**Queued actions are re-checked at execution time** (spec FR-7). A decision that
+was correct when made can be wrong minutes later: the customer may have paid,
+opted out, or been stopped by an operator. `_ineligible_reason` runs immediately
+before the provider call, and a skip is audited. Skipped actions cost nothing
+and do not consume the attempt budget — counting them would overstate spend and
+under-serve the customer.
+
+**Celery is a thin wrapper.** All orchestration lives in
+`domain/orchestrator/service.py`, synchronous and infrastructure-free. The
+worker exists to move long batches off the request thread; it holds no rules.
+That means the demo runs with or without a worker, which the spec requires, and
+the tests cover the same code the worker executes.
+
+## 6e. Measuring what the agent actually caused
+
+The model card admits the pipeline could only report *gross* recovery. This
+milestone closes that gap with a randomised holdout, and doing so surfaced two
+real measurement bugs worth recording, because both produced plausible-looking
+numbers rather than errors.
+
+The simulator models two distinct probabilities per case: `p_spontaneous`
+(recovery with no contact at all) and `p_treated` (recovery given the chosen
+intervention). Holdout cases are scored on the former and never contacted. By
+construction `p_treated >= p_spontaneous`, so **a negative measured lift is a
+bug, not a weak agent** — which is what made both defects detectable.
+
+**Bug 1 — arms were not comparable.** The treated arm's denominator included
+escalated and stopped cases that were never actioned and so recovered at zero,
+while the holdout contained proportionally fewer of them. The treated rate was
+diluted by composition. Both arms are now restricted to cases the agent
+*intended* to act on, identified by the `INTERVENTION_SELECTED` audit event —
+written before the orchestrator checks the arm, so it marks intent identically
+on both sides.
+
+**Bug 2 — the holdout was drawn repeatedly.** A withheld case stayed in
+`ACTION_SELECTED` after a no-response, so every subsequent round observed it
+again with a fresh seed, accumulating `1-(1-p)^rounds` while treated cases got a
+single draw. Simulated events are now keyed on the *opportunity*
+(`sim:{case}:attempt:{n}`, or `sim:{case}:holdout`) rather than the run seed, so
+the same UNIQUE constraint that stops a duplicate webhook stops a duplicate
+draw. Withheld cases then settle to `STOPPED` — not `EXHAUSTED`, since they
+never had an attempt to exhaust.
+
+Together these moved the measured lift from **-35.7pp to +40.9pp** on the same
+data. Both regressions are now covered by tests that assert the sign.
+
 ## 7. Idempotency
 
 Two layers, both already in place:
@@ -292,9 +345,10 @@ other.
 
 Named honestly rather than left to be discovered:
 
-- The model measures **gross** recovery among actioned cases, not incremental
-  uplift. There is no randomised holdout yet, so no causal claim can be made; the
-  simulator in M4 adds one. This is stated at length in the model card.
+- Incremental recovery is now measured against a randomised holdout, but on a
+  small sample and with no confidence interval. The API ships the caveat text
+  alongside the number so the UI cannot render one without the other.
+- The holdout share is fixed at 20% and is not power-analysed.
 - The decision threshold (0.07) actions nearly every case, because the assumed
   intervention cost is small relative to the ticket. The policy engine's
   independent confidence floor is what actually restrains action.

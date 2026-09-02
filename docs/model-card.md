@@ -209,11 +209,18 @@ smaller, and this pipeline does not measure it.
 This also explains the low threshold: with no counterfactual, "action everything"
 maximises measured recovery almost by definition.
 
-Measuring incremental uplift properly needs a randomised holdout — deliberately
-not contacting a random subset and comparing. That is planned for the simulator
-(Milestone 4) and will be reported as *simulated incremental recovery*. Until
-then, any figure quoted from this model card must be described as gross recovery
-within a simulation.
+**Update (Milestone 4): a randomised holdout now exists.** 20% of cases are
+deliberately withheld from contact, and `GET /api/v1/metrics/experiments`
+reports the difference between arms as *simulated incremental recovery*. The
+classification metrics above are unchanged — they still describe ranking
+quality, not causal effect — but the recovery figures the system reports are no
+longer only gross.
+
+Two caveats stand. The holdout is 20% on a small population with no confidence
+interval, and the comparison is only valid because both arms are restricted to
+cases the agent *intended* to act on; the raw arm totals are not comparable.
+Any figure quoted from this model card alone remains gross recovery within a
+simulation.
 
 ## 8. Feature influence
 

@@ -13,6 +13,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.28",
     "python-json-logger>=2.0",
+    "celery[redis]>=5.4",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +71,17 @@ disallow_untyped_defs = false
 # joblib ships no type information. Its use is confined to artifact load/save.
 module = ["joblib.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Celery ships no py.typed marker, so its decorators erase the signatures of
+# the functions they wrap. The tasks are thin wrappers over typed orchestrator
+# functions, which is where the real checking happens.
+module = ["celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["app.workers.*"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

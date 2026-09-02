@@ -85,6 +85,36 @@ class InterventionStrategy(StrEnum):
     STOP_RECOVERY = "STOP_RECOVERY"
 
 
+class InterventionStatus(StrEnum):
+    """Lifecycle of a single intervention attempt."""
+
+    PLANNED = "PLANNED"  # created, not yet executed
+    EXECUTED = "EXECUTED"  # provider accepted it
+    FAILED = "FAILED"  # provider rejected or errored
+    SKIPPED = "SKIPPED"  # re-check found the case no longer eligible
+
+
+class OutcomeType(StrEnum):
+    """What was observed after an intervention."""
+
+    RECOVERED = "RECOVERED"
+    NO_RESPONSE = "NO_RESPONSE"
+    FAILED_AGAIN = "FAILED_AGAIN"
+    CUSTOMER_DECLINED = "CUSTOMER_DECLINED"
+
+
+class ExperimentArm(StrEnum):
+    """Randomised assignment, for measuring incremental recovery.
+
+    Spec 10.12: recovery observed after an intervention does not prove the
+    intervention caused it. A holdout arm that is deliberately never contacted
+    is what makes the agent's incremental effect measurable rather than assumed.
+    """
+
+    TREATMENT = "TREATMENT"
+    HOLDOUT = "HOLDOUT"
+
+
 class ActorType(StrEnum):
     """Who caused an audit event. Every event has exactly one."""
 
@@ -106,6 +136,8 @@ class AuditEventType(StrEnum):
     HUMAN_DECISION = "HUMAN_DECISION"
     RECOVERY_RECORDED = "RECOVERY_RECORDED"
     TRANSITION_REJECTED = "TRANSITION_REJECTED"
+    INTERVENTION_SKIPPED = "INTERVENTION_SKIPPED"
+    SIMULATED_EVENT = "SIMULATED_EVENT"
 
 
 #: Deterministic mapping from failure category to recoverability prior.

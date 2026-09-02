@@ -8,20 +8,30 @@ Only ``seed`` and ``reset`` exist in Slice 1; ``run-batch`` and
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_demo_enabled
-from app.api.schemas import MoneyOut, SeedRequest, SeedResponse
+from app.api.schemas import (
+    MoneyOut,
+    RunBatchRequest,
+    RunBatchResponse,
+    SeedRequest,
+    SeedResponse,
+    SimulateOutcomesRequest,
+    SimulateOutcomesResponse,
+)
 from app.core.config import Settings
 from app.core.money import Money
 from app.db.models import Customer, Merchant, RecoveryCase
 from app.domain.cases import service as cases
 from app.domain.cases.service import DuplicateCaseError, NewCaseInput
 from app.domain.enums import FailureCategory, SourceType
+from app.domain.orchestrator import service as orchestrator
+from app.domain.simulator import service as simulator
 
 # Repo-root-relative import of the shared generator, so the seeded demo data and
 # the ML training data come from exactly one implementation.
@@ -168,3 +178,78 @@ def reset(
     ).scalar_one()
     session.execute(delete(RecoveryCase).where(RecoveryCase.is_synthetic.is_(True)))
     return {"deleted_cases": deleted}
+
+
+@router.post("/run-batch", response_model=RunBatchResponse)
+def run_batch(
+    payload: RunBatchRequest,
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(require_demo_enabled),
+) -> RunBatchResponse:
+    """Evaluate pending cases and execute whatever policy authorises.
+
+    Runs inline rather than dispatching to Celery, because the spec requires a
+    demo that does not depend on external timing. The worker task calls the
+    identical orchestrator function.
+    """
+    merchant = _get_or_create_merchant(session)
+    result = orchestrator.run_batch(session, merchant, now=datetime.now(UTC), limit=payload.limit)
+    return RunBatchResponse(
+        evaluated=result.evaluated,
+        planned=result.planned,
+        executed=result.executed,
+        skipped=result.skipped,
+        escalated=result.escalated,
+        stopped=result.stopped,
+        deferred=result.deferred,
+        holdout_withheld=result.holdout_withheld,
+        total_at_risk=MoneyOut.of(result.total_at_risk.paise),
+        estimated_spend=MoneyOut.of(result.estimated_spend.paise),
+        by_rule=dict(sorted(result.by_rule.items())),
+    )
+
+
+@router.post("/simulate-outcomes", response_model=SimulateOutcomesResponse)
+def simulate_outcomes(
+    payload: SimulateOutcomesRequest,
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(require_demo_enabled),
+) -> SimulateOutcomesResponse:
+    """Reveal deterministic outcomes for cases awaiting observation."""
+    merchant = _get_or_create_merchant(session)
+    seed = payload.seed if payload.seed is not None else settings.synthetic_seed
+    summary = simulator.simulate_outcomes(
+        session, merchant.id, seed=seed, now=datetime.now(UTC), limit=payload.limit
+    )
+    return SimulateOutcomesResponse(
+        cases_observed=summary.cases_observed,
+        recovered=summary.recovered,
+        no_response=summary.no_response,
+        recovered_amount=MoneyOut.of(summary.recovered_amount.paise),
+        treatment_observed=summary.treatment_observed,
+        treatment_recovered=summary.treatment_recovered,
+        holdout_observed=summary.holdout_observed,
+        holdout_recovered=summary.holdout_recovered,
+    )
+
+
+@router.post("/run-full-cycle")
+def run_full_cycle(
+    payload: RunBatchRequest,
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(require_demo_enabled),
+) -> dict[str, object]:
+    """Drive the whole loop to convergence: act, observe, retry, repeat.
+
+    This is the single call the demo makes: it takes a seeded population all the
+    way from ingestion to settled recovered revenue.
+    """
+    merchant = _get_or_create_merchant(session)
+    return orchestrator.run_full_cycle(
+        session,
+        merchant,
+        seed=settings.synthetic_seed,
+        now=datetime.now(UTC),
+        rounds=payload.rounds,
+        limit=payload.limit,
+    )

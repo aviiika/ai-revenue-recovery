@@ -38,7 +38,11 @@ from app.domain.enums import (
     ActorType,
     AuditEventType,
     CaseState,
+    ExperimentArm,
     FailureCategory,
+    InterventionStatus,
+    InterventionStrategy,
+    OutcomeType,
     Recoverability,
     SourceType,
 )
@@ -166,6 +170,13 @@ class RecoveryCase(Base):
 
     do_not_contact: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Randomised arm. HOLDOUT cases are deliberately never contacted, so the
+    # gap in recovery between arms measures the agent's incremental effect
+    # rather than assuming it (spec 10.12).
+    experiment_arm: Mapped[ExperimentArm] = mapped_column(
+        String(20), nullable=False, default=ExperimentArm.TREATMENT
+    )
+
     # Every row created by the synthetic generator is flagged. The UI surfaces
     # this as a banner; the spec forbids presenting synthetic results as real.
     is_synthetic: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -182,6 +193,16 @@ class RecoveryCase(Base):
     audit_events: Mapped[list[AuditEvent]] = relationship(
         back_populates="recovery_case",
         order_by="AuditEvent.sequence",
+        cascade="all, delete-orphan",
+    )
+    interventions: Mapped[list[Intervention]] = relationship(
+        back_populates="recovery_case",
+        order_by="Intervention.attempt_number",
+        cascade="all, delete-orphan",
+    )
+    outcomes: Mapped[list[RecoveryOutcome]] = relationship(
+        back_populates="recovery_case",
+        order_by="RecoveryOutcome.observed_at",
         cascade="all, delete-orphan",
     )
 
@@ -238,4 +259,99 @@ class AuditEvent(Base):
         UniqueConstraint("recovery_case_id", "sequence", name="audit_sequence_per_case"),
         CheckConstraint("sequence > 0", name="sequence_positive"),
         Index("ix_audit_events_case_seq", "recovery_case_id", "sequence"),
+    )
+
+
+class Intervention(Base):
+    """One bounded action taken against a case (spec section 9, FR-5).
+
+    Created *before* execution, so a crash mid-flight leaves a PLANNED row
+    rather than an invisible side effect. ``idempotency_key`` carries a UNIQUE
+    constraint, which makes "every intervention must be idempotent" a database
+    guarantee rather than something careful coding has to remember.
+    """
+
+    __tablename__ = "interventions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    recovery_case_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("recovery_cases.id", ondelete="CASCADE"), nullable=False
+    )
+
+    strategy: Mapped[InterventionStrategy] = mapped_column(String(40), nullable=False)
+    channel: Mapped[str] = mapped_column(String(30), nullable=False, default="SIMULATED")
+    status: Mapped[InterventionStatus] = mapped_column(
+        String(20), nullable=False, default=InterventionStatus.PLANNED
+    )
+
+    # Attempt ordinal for this case. Combined with the case id it forms the
+    # idempotency key, so re-running an orchestration pass is a no-op.
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+
+    planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    estimated_cost_paise: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    # Frozen copies of what the engine saw and decided, so a decision stays
+    # explicable even after the merchant changes policy config (spec FR-8).
+    policy_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONBType, nullable=False, default=dict)
+    decision_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONBType, nullable=False, default=dict
+    )
+    result: Mapped[dict[str, Any]] = mapped_column(JSONBType, nullable=False, default=dict)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    recovery_case: Mapped[RecoveryCase] = relationship(back_populates="interventions")
+    outcomes: Mapped[list[RecoveryOutcome]] = relationship(back_populates="intervention")
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="intervention_idempotency_key"),
+        CheckConstraint("attempt_number > 0", name="attempt_number_positive"),
+        CheckConstraint("estimated_cost_paise >= 0", name="cost_non_negative"),
+        Index("ix_interventions_case", "recovery_case_id", "attempt_number"),
+    )
+
+
+class RecoveryOutcome(Base):
+    """What was observed after an intervention (spec section 9).
+
+    Kept separate from the case so a case can accumulate several observations;
+    the case's ``recovered_amount_paise`` remains the settled total.
+    """
+
+    __tablename__ = "recovery_outcomes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    recovery_case_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("recovery_cases.id", ondelete="CASCADE"), nullable=False
+    )
+    intervention_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUIDType, ForeignKey("interventions.id", ondelete="SET NULL"), nullable=True
+    )
+
+    outcome_type: Mapped[OutcomeType] = mapped_column(String(30), nullable=False)
+    amount_recovered_paise: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    # Provider event id, or the simulator's synthetic equivalent. UNIQUE, so a
+    # redelivered event cannot be recorded — or counted — twice.
+    external_event_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    recovery_case: Mapped[RecoveryCase] = relationship(back_populates="outcomes")
+    intervention: Mapped[Intervention | None] = relationship(back_populates="outcomes")
+
+    __table_args__ = (
+        UniqueConstraint("external_event_id", name="outcome_external_event_id"),
+        CheckConstraint("amount_recovered_paise >= 0", name="outcome_amount_non_negative"),
+        Index("ix_recovery_outcomes_case", "recovery_case_id", "observed_at"),
     )

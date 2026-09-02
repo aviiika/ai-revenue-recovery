@@ -31,10 +31,13 @@ and is fully auditable, end to end.**
 | Model card, leakage guards, graceful degradation | Done |
 | Overview + intervention metrics endpoints | Done |
 | Dashboard: overview, case table, case detail + audit timeline, model page | Done |
+| Interventions with DB-enforced idempotency and execution-time re-checks | Done |
+| Deterministic simulator, randomised holdout, incremental measurement | Done |
+| Agent vs baseline comparison; Celery worker wrapping the orchestrator | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 145 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
-| Interventions, Razorpay, human review queue | Not yet — see [Roadmap](#roadmap) |
+| 173 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| Razorpay test mode, human review queue, LLM explanations | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -237,6 +240,10 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `GET` | `/api/v1/metrics/overview` | KPIs, funnel, failure reasons, time series |
 | `GET` | `/api/v1/metrics/interventions` | Per-strategy performance from the audit trail |
 | `GET` | `/api/v1/metrics/models` | Training report; `trained: false` when untrained |
+| `GET` | `/api/v1/metrics/experiments` | Agent vs baseline, and holdout-based incremental recovery |
+| `POST` | `/api/v1/demo/run-batch` | One orchestration pass (gated) |
+| `POST` | `/api/v1/demo/simulate-outcomes` | Reveal deterministic outcomes (gated) |
+| `POST` | `/api/v1/demo/run-full-cycle` | Act → observe → retry to convergence (gated) |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
 
@@ -282,12 +289,9 @@ These are not stylistic preferences; they are checked by tests.
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **Orchestrator + simulator** — intervention execution, batch runs,
-   agent vs baseline, and the randomised holdout that makes incremental
-   (rather than gross) recovery measurable
-2. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
-3. **Human review queue** — approve, override, stop, escalate
-4. **Demo hardening** — end-to-end tests, demo script, final metrics
+1. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
+2. **Human review queue** — approve, override, stop, escalate
+3. **Demo hardening** — end-to-end tests, demo script, final metrics
 
 ## Licence and data
 

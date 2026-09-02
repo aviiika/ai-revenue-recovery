@@ -229,3 +229,44 @@ class EvaluateBatchResponse(BaseModel):
     total_at_risk: MoneyOut
     total_expected_net_paise: int
     by_rule: dict[str, int]
+
+
+class RunBatchRequest(BaseModel):
+    limit: int = Field(default=500, ge=1, le=5000)
+    rounds: int = Field(default=3, ge=1, le=10, description="Act/observe cycles to run.")
+
+
+class RunBatchResponse(BaseModel):
+    """Outcome of one orchestration pass."""
+
+    evaluated: int
+    planned: int
+    executed: int
+    skipped: int
+    escalated: int
+    stopped: int
+    deferred: int
+    #: Cases the agent chose to act on but withheld because they are in the
+    #: randomised holdout arm. Withholding is the point of the arm.
+    holdout_withheld: int
+    total_at_risk: MoneyOut
+    estimated_spend: MoneyOut
+    by_rule: dict[str, int]
+
+
+class SimulateOutcomesRequest(BaseModel):
+    seed: int | None = Field(default=None, description="Defaults to SYNTHETIC_SEED.")
+    limit: int = Field(default=2000, ge=1, le=5000)
+
+
+class SimulateOutcomesResponse(BaseModel):
+    cases_observed: int
+    recovered: int
+    no_response: int
+    recovered_amount: MoneyOut
+    #: Split by arm, so the incremental comparison is visible in the raw result
+    #: rather than only after aggregation.
+    treatment_observed: int
+    treatment_recovered: int
+    holdout_observed: int
+    holdout_recovered: int

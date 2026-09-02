@@ -5,10 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.schemas import MoneyOut
+from app.db.models import Merchant
+from app.domain.experiments import service as experiments_service
 from app.domain.metrics import service as metrics
 from app.ml.scorer import model_report
 
@@ -73,3 +76,20 @@ def model_metrics() -> dict[str, Any]:
             ),
         }
     return {"trained": True, **report}
+
+
+@router.get("/experiments")
+def experiments(session: Session = Depends(get_db)) -> dict[str, Any]:
+    """Agent vs baseline, plus the holdout-based incremental measurement.
+
+    Spec section 18 asks for the policy comparison; spec 10.12 asks that we not
+    claim causality without a design that supports it. Both live here, and the
+    incremental block carries its own caveat text so the UI cannot render the
+    number without it.
+    """
+    merchant_id = (
+        session.execute(select(Merchant.id).order_by(Merchant.created_at)).scalars().first()
+    )
+    if merchant_id is None:
+        return {"available": False, "message": "No merchant exists yet. Seed demo data first."}
+    return {"available": True, **experiments_service.comparison_report(session, merchant_id)}

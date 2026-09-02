@@ -16,7 +16,7 @@ needed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -44,6 +44,22 @@ from app.domain.scoring.service import (
 
 class NotEvaluableError(Exception):
     """Raised when a case is in a state the evaluator cannot act on."""
+
+
+def _as_aware(value: datetime | None) -> datetime | None:
+    """Force a stored timestamp to be timezone-aware, assuming UTC.
+
+    SQLite has no timezone type, so ``DateTime(timezone=True)`` round-trips as a
+    naive datetime there while PostgreSQL returns an aware one. Comparing the
+    two raises ``TypeError``, which would surface as a cooldown crash on one
+    backend and not the other.
+
+    Everything is written in UTC, so attaching UTC to a naive value recovers the
+    original instant rather than guessing.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
 
 
 def _default_scorer() -> RecoveryScorer:
@@ -197,7 +213,7 @@ def evaluate(
         recoverability=recoverability,
         attempt_count=case.attempt_count,
         do_not_contact=case.do_not_contact,
-        last_action_at=case.last_action_at,
+        last_action_at=_as_aware(case.last_action_at),
         evaluated_at=now,
     )
     decision = decide(snapshot, scored, config)
