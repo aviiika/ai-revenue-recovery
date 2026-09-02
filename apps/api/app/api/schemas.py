@@ -120,6 +120,8 @@ class NewCaseRequest(BaseModel):
     do_not_contact: bool = False
     is_synthetic: bool = False
     attempt_count: int = Field(default=0, ge=0, description="Attempts already made upstream.")
+    payment_method: str | None = Field(default=None, max_length=20)
+    subscription_age_days: int | None = Field(default=None, ge=0)
 
     @field_validator("detected_at")
     @classmethod

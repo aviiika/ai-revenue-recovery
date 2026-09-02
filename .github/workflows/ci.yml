@@ -47,7 +47,9 @@ jobs:
         run: PGPASSWORD=revrec psql -h localhost -U revrec -d revrec -c "CREATE DATABASE revrec_test OWNER revrec;"
 
       - name: Install
-        run: python -m pip install -e "apps/api[dev]" -e .
+        # The train extra is needed so the ML tests exercise the real
+        # scikit-learn path rather than only the fallback.
+        run: python -m pip install -e "apps/api[dev]" -e ".[train]" pandas-stubs
 
       - name: Lint
         run: python -m ruff check apps/api/app apps/api/tests ml
@@ -62,6 +64,9 @@ jobs:
       - name: Migrations apply cleanly
         run: python -m alembic upgrade head
         working-directory: apps/api
+
+      - name: Train the model (also proves the pipeline runs end to end)
+        run: python -m ml.src.train --count 2000 --no-write
 
       - name: Test
         run: python -m pytest -q

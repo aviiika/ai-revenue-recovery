@@ -21,7 +21,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.core.money import Money
-from app.db.models import Merchant, RecoveryCase
+from app.db.models import Customer, Merchant, RecoveryCase
 from app.domain.audit import service as audit
 from app.domain.cases import service as cases
 from app.domain.enums import (
@@ -34,11 +34,31 @@ from app.domain.enums import (
 )
 from app.domain.policies.config import PolicyConfig
 from app.domain.policies.engine import CaseSnapshot, PolicyDecision, decide
-from app.domain.scoring.service import DeterministicScorer, RecoveryScorer, score_all
+from app.domain.scoring.service import (
+    CaseFeatures,
+    DeterministicScorer,
+    RecoveryScorer,
+    score_all,
+)
 
 
 class NotEvaluableError(Exception):
     """Raised when a case is in a state the evaluator cannot act on."""
+
+
+def _default_scorer() -> RecoveryScorer:
+    """Resolve the scorer lazily.
+
+    Imported inside the function so the domain package does not take a hard
+    import-time dependency on the ML stack; a deployment without scikit-learn
+    installed still imports and runs on the deterministic baseline.
+    """
+    try:
+        from app.ml.scorer import get_scorer
+
+        return get_scorer()
+    except ImportError:
+        return DeterministicScorer()
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +115,10 @@ def evaluate(
             f"Case {case.id} is in terminal state {case.current_state} and cannot be evaluated"
         )
 
-    active_scorer = scorer or DeterministicScorer()
+    # Uses the trained model when its artifact is present, and the
+    # deterministic baseline otherwise (spec section 19: model unavailable ->
+    # deterministic fallback).
+    active_scorer = scorer if scorer is not None else _default_scorer()
     config = PolicyConfig.from_merchant(merchant.policy_config, merchant.high_value_threshold_paise)
 
     # --- Diagnose -------------------------------------------------------
@@ -106,13 +129,25 @@ def evaluate(
     recoverability = Recoverability(
         case.recoverability or CATEGORY_RECOVERABILITY[FailureCategory(case.failure_category)]
     )
-    scored = score_all(
-        active_scorer,
+    # Customer history is a model input. A case with no linked customer scores
+    # on defaults rather than failing -- an unknown customer is a normal case,
+    # not an error.
+    customer = session.get(Customer, case.customer_id) if case.customer_id else None
+    features = CaseFeatures(
+        recoverability=recoverability,
         failure_category=FailureCategory(case.failure_category),
         amount_at_risk=Money(case.amount_at_risk_paise),
         attempt_count=case.attempt_count,
-        recoverability=recoverability,
+        source_type=str(case.source_type),
+        payment_method=case.payment_method,
+        subscription_age_days=case.subscription_age_days,
+        detected_at=case.detected_at,
+        customer_segment=customer.segment if customer else None,
+        customer_tenure_days=customer.tenure_days if customer else 0,
+        prior_successful_payments=customer.prior_successful_payments if customer else 0,
+        prior_failed_payments=customer.prior_failed_payments if customer else 0,
     )
+    scored = score_all(active_scorer, features)
 
     best = scored[0] if scored else None
     case.recoverability_score = float(best.probability) if best else None

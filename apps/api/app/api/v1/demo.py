@@ -108,6 +108,7 @@ def seed(
             do_not_contact=item.do_not_contact,
             tenure_days=item.customer_tenure_days,
             prior_successful_payments=item.prior_successful_payments,
+            prior_failed_payments=item.prior_failed_payments,
         )
         session.add(customer)
         existing_refs.add(item.customer_external_ref)
@@ -135,6 +136,8 @@ def seed(
                     # attempt_number is 1-based ("this is the Nth attempt"), so
                     # prior attempts is one fewer.
                     attempt_count=max(item.attempt_number - 1, 0),
+                    payment_method=item.payment_method,
+                    subscription_age_days=item.subscription_age_days,
                 ),
             )
         except DuplicateCaseError:

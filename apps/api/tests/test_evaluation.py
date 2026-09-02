@@ -27,6 +27,7 @@ from app.domain.enums import (
     Recoverability,
     SourceType,
 )
+from app.domain.scoring.service import DeterministicScorer
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -68,7 +69,7 @@ def test_evaluation_records_a_reconstructable_trail(session: Session, merchant: 
     """Spec section 20: model version, probability, policies fired and the
     chosen action must all be recoverable from the trail alone."""
     case = make_case(session, merchant)
-    evaluation.evaluate(session, case, merchant, now=NOW)
+    evaluation.evaluate(session, case, merchant, now=NOW, scorer=DeterministicScorer())
 
     trail = audit.get_trail(session, case.id)
     event_types = [e.event_type for e in trail]
@@ -105,7 +106,7 @@ def test_diagnosis_sets_recoverability_deterministically(
 
 def test_scoring_persists_model_outputs_on_the_case(session: Session, merchant: Merchant) -> None:
     case = make_case(session, merchant)
-    evaluation.evaluate(session, case, merchant, now=NOW)
+    evaluation.evaluate(session, case, merchant, now=NOW, scorer=DeterministicScorer())
 
     assert case.model_version == "deterministic-baseline-v1"
     assert case.recoverability_score is not None

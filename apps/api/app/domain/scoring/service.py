@@ -16,12 +16,12 @@ unavailable, which the spec requires the demo to survive.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
 from app.core.money import Money, SignedMoney
 from app.domain.enums import (
-    CATEGORY_RECOVERABILITY,
     FailureCategory,
     InterventionStrategy,
     Recoverability,
@@ -117,24 +117,53 @@ class ScoredStrategy:
         return self.expected_net.is_positive
 
 
+@dataclass(frozen=True, slots=True)
+class CaseFeatures:
+    """Everything a scorer may look at, in domain terms.
+
+    Widened from the original three-argument signature once a real model needed
+    real features. Keeping this a single explicit object -- rather than a growing
+    argument list -- means adding a feature is one change here and one in the ML
+    adapter, and the policy engine never sees it at all.
+
+    Contains no outcome fields: everything here is knowable at the moment the
+    decision is made.
+    """
+
+    recoverability: Recoverability
+    failure_category: FailureCategory
+    amount_at_risk: Money
+    attempt_count: int
+    source_type: str = "PAYMENT"
+    payment_method: str | None = None
+    customer_segment: str | None = None
+    customer_tenure_days: int = 0
+    prior_successful_payments: int = 0
+    prior_failed_payments: int = 0
+    subscription_age_days: int | None = None
+    detected_at: datetime | None = None
+
+    @property
+    def hour_of_day(self) -> int:
+        return self.detected_at.hour if self.detected_at else 12
+
+    @property
+    def day_of_week(self) -> int:
+        return self.detected_at.weekday() if self.detected_at else 0
+
+
 class RecoveryScorer(Protocol):
     """Estimates P(recovery | case, strategy).
 
-    Milestone 2 adds a trained implementation. The policy engine depends on this
-    Protocol, never on a concrete scorer, so swapping the model in changes no
+    The policy engine depends on this Protocol, never on a concrete scorer, so
+    swapping the trained model in for the deterministic baseline changes no
     policy code.
     """
 
     @property
     def model_version(self) -> str: ...
 
-    def probability(
-        self,
-        *,
-        recoverability: Recoverability,
-        strategy: InterventionStrategy,
-        attempt_count: int,
-    ) -> Decimal: ...
+    def probability(self, features: CaseFeatures, strategy: InterventionStrategy) -> Decimal: ...
 
 
 class DeterministicScorer:
@@ -150,22 +179,29 @@ class DeterministicScorer:
     def model_version(self) -> str:
         return DETERMINISTIC_MODEL_VERSION
 
-    def probability(
-        self,
-        *,
-        recoverability: Recoverability,
-        strategy: InterventionStrategy,
-        attempt_count: int,
-    ) -> Decimal:
-        base = _BASE_PROBABILITY[recoverability]
-        fit = _STRATEGY_FIT[recoverability].get(strategy, Decimal("0.10"))
+    def probability(self, features: CaseFeatures, strategy: InterventionStrategy) -> Decimal:
+        base = _BASE_PROBABILITY[features.recoverability]
+        fit = strategy_fit(features.recoverability, strategy)
 
         # Each prior attempt makes the next one less likely to land. Capped so
         # the probability decays rather than collapsing to zero.
-        decay = Decimal("0.72") ** max(attempt_count, 0)
+        decay = Decimal("0.72") ** max(features.attempt_count, 0)
 
         probability = base * fit * decay
         return min(max(probability, Decimal("0.01")), Decimal("0.95"))
+
+
+def strategy_fit(recoverability: Recoverability, strategy: InterventionStrategy) -> Decimal:
+    """How well a strategy suits a diagnosed failure class.
+
+    Exposed because the ML scorer reuses it: the trained model predicts
+    case-level recoverability, and this deterministic multiplier turns that into
+    a per-strategy estimate. Spec 10.1 sanctions exactly this for the MVP --
+    "train a baseline binary classifier and apply deterministic intervention
+    rules" -- because the synthetic data has no counterfactual per-strategy
+    outcomes to learn from.
+    """
+    return _STRATEGY_FIT[recoverability].get(strategy, Decimal("0.10"))
 
 
 def intervention_cost(strategy: InterventionStrategy) -> Money:
@@ -176,9 +212,7 @@ def score_strategy(
     scorer: RecoveryScorer,
     *,
     strategy: InterventionStrategy,
-    recoverability: Recoverability,
-    amount_at_risk: Money,
-    attempt_count: int,
+    features: CaseFeatures,
 ) -> ScoredStrategy:
     """Score one candidate strategy.
 
@@ -186,9 +220,8 @@ def score_strategy(
     The probability comes from the model; every rupee figure below is computed
     deterministically here.
     """
-    probability = scorer.probability(
-        recoverability=recoverability, strategy=strategy, attempt_count=attempt_count
-    )
+    probability = scorer.probability(features, strategy)
+    amount_at_risk = features.amount_at_risk
     expected_gross = amount_at_risk.scale(probability)
     cost = intervention_cost(strategy)
     expected_net = SignedMoney.of(expected_gross) - SignedMoney.of(cost)
@@ -206,11 +239,7 @@ def score_strategy(
 
 def score_all(
     scorer: RecoveryScorer,
-    *,
-    failure_category: FailureCategory,
-    amount_at_risk: Money,
-    attempt_count: int,
-    recoverability: Recoverability | None = None,
+    features: CaseFeatures,
     strategies: tuple[InterventionStrategy, ...] = ACTIONABLE_STRATEGIES,
 ) -> list[ScoredStrategy]:
     """Score every candidate strategy, best expected net value first.
@@ -218,16 +247,8 @@ def score_all(
     Ranking here is advisory. The policy engine still has the final word and may
     reject the top-ranked option outright.
     """
-    resolved = recoverability or CATEGORY_RECOVERABILITY[failure_category]
     scored = [
-        score_strategy(
-            scorer,
-            strategy=strategy,
-            recoverability=resolved,
-            amount_at_risk=amount_at_risk,
-            attempt_count=attempt_count,
-        )
-        for strategy in strategies
+        score_strategy(scorer, strategy=strategy, features=features) for strategy in strategies
     ]
     # Ties broken by strategy name so the ordering is fully deterministic.
     scored.sort(key=lambda s: (-s.expected_net.paise, s.strategy))

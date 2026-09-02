@@ -103,6 +103,7 @@ class Customer(Base):
     preferred_language: Mapped[str | None] = mapped_column(String(16), nullable=True)
     tenure_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     prior_successful_payments: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    prior_failed_payments: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -140,6 +141,12 @@ class RecoveryCase(Base):
     )
     failure_reason_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     recoverability: Mapped[Recoverability | None] = mapped_column(String(20), nullable=True)
+
+    # Model features (spec 10.2). Stored on the case rather than derived at
+    # prediction time, so training and serving read the identical values and
+    # cannot drift apart.
+    payment_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    subscription_age_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     current_state: Mapped[CaseState] = mapped_column(

@@ -18,7 +18,7 @@ from app.core.money import Money
 from app.domain.enums import CaseState, FailureCategory, InterventionStrategy, Recoverability
 from app.domain.policies.config import PolicyConfig
 from app.domain.policies.engine import CaseSnapshot, RuleId, decide
-from app.domain.scoring.service import DeterministicScorer, score_all
+from app.domain.scoring.service import CaseFeatures, DeterministicScorer, score_all
 
 NOW = datetime(2026, 9, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -45,10 +45,12 @@ def scored_for(
 ) -> list:
     return score_all(
         DeterministicScorer(),
-        failure_category=FailureCategory.INSUFFICIENT_FUNDS,
-        amount_at_risk=amount or Money.from_rupees("5000.00"),
-        attempt_count=attempt_count,
-        recoverability=recoverability,
+        CaseFeatures(
+            recoverability=recoverability,
+            failure_category=FailureCategory.INSUFFICIENT_FUNDS,
+            amount_at_risk=amount or Money.from_rupees("5000.00"),
+            attempt_count=attempt_count,
+        ),
     )
 
 
@@ -354,16 +356,17 @@ def test_expected_net_is_gross_minus_cost() -> None:
 
 def test_probability_decays_with_attempts() -> None:
     scorer = DeterministicScorer()
-    first = scorer.probability(
-        recoverability=Recoverability.ACTIONABLE,
-        strategy=InterventionStrategy.CREATE_PAYMENT_LINK,
-        attempt_count=0,
-    )
-    third = scorer.probability(
-        recoverability=Recoverability.ACTIONABLE,
-        strategy=InterventionStrategy.CREATE_PAYMENT_LINK,
-        attempt_count=2,
-    )
+
+    def features(attempts: int) -> CaseFeatures:
+        return CaseFeatures(
+            recoverability=Recoverability.ACTIONABLE,
+            failure_category=FailureCategory.INSUFFICIENT_FUNDS,
+            amount_at_risk=Money.from_rupees("5000.00"),
+            attempt_count=attempts,
+        )
+
+    first = scorer.probability(features(0), InterventionStrategy.CREATE_PAYMENT_LINK)
+    third = scorer.probability(features(2), InterventionStrategy.CREATE_PAYMENT_LINK)
     assert third < first
 
 
@@ -373,7 +376,13 @@ def test_probability_stays_within_bounds() -> None:
         for strategy in InterventionStrategy:
             for attempts in range(0, 12):
                 p = scorer.probability(
-                    recoverability=recoverability, strategy=strategy, attempt_count=attempts
+                    CaseFeatures(
+                        recoverability=recoverability,
+                        failure_category=FailureCategory.INSUFFICIENT_FUNDS,
+                        amount_at_risk=Money.from_rupees("5000.00"),
+                        attempt_count=attempts,
+                    ),
+                    strategy,
                 )
                 assert Decimal("0.01") <= p <= Decimal("0.95")
 

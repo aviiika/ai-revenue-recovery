@@ -141,11 +141,28 @@ done. The state machine caught the modelling error; the fix belonged in the engi
 * **Expected value** is deterministic arithmetic over that probability, in integer
   paise. Money is never computed by a model.
 
-`RecoveryScorer` is a Protocol. `DeterministicScorer` implements it today with an
-interpretable, monotone heuristic. When Milestone 2 lands a trained classifier, it
-implements the same Protocol and **no policy code changes**. The deterministic
-scorer is not scaffolding to delete — it is the permanent fallback for when the
-model artifact is missing, which the spec requires the demo to survive.
+`RecoveryScorer` is a Protocol with two implementations: `DeterministicScorer`
+(interpretable heuristic) and `MLScorer` (the trained classifier). Swapping the
+model in changed **no policy code** — but it did require widening the protocol
+from three loose arguments to a single `CaseFeatures` object, because the
+original signature was too narrow to serve a real model. That is the seam
+working as intended: the change was contained to the scoring module and its
+adapter.
+
+The deterministic scorer is not scaffolding to delete. It is the permanent
+fallback for a missing, corrupt, or unimportable model, which the spec requires
+the demo to survive.
+
+**Dependency direction is one-way.** `apps/api/app/ml/scorer.py` imports
+`ml.src`; nothing under `ml/` imports the app. The ML pipeline stays runnable on
+its own, and the domain takes no import-time dependency on scikit-learn — a
+deployment without it still boots on the baseline.
+
+**Anti-skew measure.** `ml/src/features.py` is the only place features are
+defined, and both training (`build_feature_frame`) and serving (`context_to_row`)
+funnel through it. Training/serving skew is silent when it happens — the model
+just predicts badly — so it is prevented structurally and asserted by a test that
+compares the serving row's columns against the training columns.
 
 Intervention costs are explicit per strategy, so the engine optimises expected
 *net* recovery. `ESCALATE_HUMAN` is by far the most expensive, because operator
@@ -244,9 +261,15 @@ other.
 
 Named honestly rather than left to be discovered:
 
-- No trained ML model yet; `DeterministicScorer` supplies probabilities. Its
-  numbers are heuristic priors, not learned from data, and should not be presented
-  as model performance.
+- The model measures **gross** recovery among actioned cases, not incremental
+  uplift. There is no randomised holdout yet, so no causal claim can be made; the
+  simulator in M4 adds one. This is stated at length in the model card.
+- The decision threshold (0.07) actions nearly every case, because the assumed
+  intervention cost is small relative to the ticket. The policy engine's
+  independent confidence floor is what actually restrains action.
+- Per-strategy probabilities are the learned case-level probability times a
+  hand-specified strategy-fit multiplier. The multiplier is assumed, not learned,
+  because the synthetic data has no counterfactuals.
 - Nothing executes an intervention yet. The loop stops at `ACTION_SELECTED`;
   `ACTION_PENDING` onward arrives with the orchestrator in M4.
 - The "max reminders per 24h" rule is enforced structurally by the cooldown (at

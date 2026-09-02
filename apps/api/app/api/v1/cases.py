@@ -164,6 +164,8 @@ def ingest_batch(
                     do_not_contact=item.do_not_contact,
                     is_synthetic=item.is_synthetic,
                     attempt_count=item.attempt_count,
+                    payment_method=item.payment_method,
+                    subscription_age_days=item.subscription_age_days,
                 ),
             )
         except DuplicateCaseError:

@@ -27,10 +27,12 @@ and is fully auditable, end to end.**
 | Case ingestion / list / detail APIs, idempotent batch | Done |
 | Policy engine: 13 rules, stopping rules, EV gates, cooldown, backoff | Done |
 | Recovery scoring with deterministic baseline + ML seam | Done |
+| ML baseline: logistic regression, isotonic calibration, EV thresholding | Done |
+| Model card, leakage guards, graceful degradation | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 125 tests, ruff clean, mypy strict clean | Done |
-| Trained ML model, interventions, Razorpay, dashboard | Not yet — see [Roadmap](#roadmap) |
+| 139 tests, ruff clean, mypy strict clean | Done |
+| Interventions, Razorpay, dashboard, human review | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -173,6 +175,22 @@ Lint and typecheck:
 cd apps/api && .venv/Scripts/python.exe -m ruff check app tests ../../ml && .venv/Scripts/python.exe -m mypy app
 ```
 
+## Training the model
+
+```bash
+apps/api/.venv/Scripts/python.exe -m ml.src.train --count 6000
+```
+
+Deterministic given the seed. Artifacts land in `ml/artifacts/` (gitignored —
+rebuild rather than commit binaries). **The system runs without this step**: with
+no artifact present it falls back to the deterministic baseline scorer, which is
+the normal state of a fresh clone.
+
+Full metrics, calibration, the threshold trade-off and the causal caveat are in
+[`docs/model-card.md`](docs/model-card.md). Headline, on held-out synthetic test
+data: PR-AUC **0.675**, Brier **0.203**, ECE **0.052**, with the interpretable
+logistic baseline beating gradient boosting by 0.02 PR-AUC.
+
 Inspect the synthetic population without touching a database:
 
 ```bash
@@ -192,6 +210,7 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `POST` | `/api/v1/cases/{id}/evaluate` | Run diagnose → score → policy on one case |
 | `POST` | `/api/v1/cases/{id}/stop` | Operator kill switch |
 | `POST` | `/api/v1/cases/evaluate-batch` | Run the agent across all pending cases |
+| `GET` | `/api/v1/metrics/models` | Training report; `trained: false` when untrained |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
 
@@ -227,19 +246,21 @@ These are not stylistic preferences; they are checked by tests.
   model ranks options and an LLM explains them, but neither can act.
 - **Opt-out is checked before economics**, so a profitable case belonging to an
   opted-out customer is still stopped. This ordering is tested explicitly.
+- **Outcome fields are never model features.** A leakage guard fails the training
+  run if one appears, and a test asserts the guard itself fires.
+- **The system degrades rather than crashes.** A missing, corrupt, or
+  unimportable model falls back to the deterministic scorer.
 - **Synthetic data is labelled everywhere** it appears, including in API responses.
 
 ## Roadmap
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **ML baseline** — logistic regression, calibration, business-value
-   thresholding, swapped in behind the existing `RecoveryScorer` protocol
-2. **Dashboard** — Next.js, case table, audit timeline, KPI cards
-3. **Orchestrator + simulator** — intervention execution, batch runs, agent vs baseline
-4. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
-5. **Human review queue** — approve, override, stop, escalate
-6. **Demo hardening** — E2E tests, model card, demo script
+1. **Dashboard** — Next.js, case table, audit timeline, KPI cards
+2. **Orchestrator + simulator** — intervention execution, batch runs, agent vs baseline
+3. **Razorpay test mode** — Payment Links, webhook signature verification, idempotency
+4. **Human review queue** — approve, override, stop, escalate
+5. **Demo hardening** — E2E tests, model card, demo script
 
 ## Licence and data
 

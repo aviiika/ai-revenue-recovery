@@ -163,9 +163,17 @@ def test_evaluate_moves_case_to_action_selected(client: TestClient) -> None:
     body = response.json()
 
     assert body["case"]["current_state"] == "ACTION_SELECTED"
-    assert body["decision"]["recommended_strategy"] == "WAIT_AND_RETRY"
     assert body["decision"]["applied_rules"]
-    assert body["model_version"] == "deterministic-baseline-v1"
+    # Which scorer serves the request depends on whether a trained artifact is
+    # present, so assert the contract (a real strategy, an identified model)
+    # rather than pinning to one implementation.
+    assert body["decision"]["recommended_strategy"] in {
+        "WAIT_AND_RETRY",
+        "SEND_REMINDER_SIMULATED",
+        "REQUEST_ALTERNATE_METHOD",
+        "CREATE_PAYMENT_LINK",
+    }
+    assert body["model_version"] in {"deterministic-baseline-v1", "recovery-clf-v1"}
 
 
 def test_evaluate_exposes_the_full_decision_rationale(client: TestClient) -> None:
