@@ -217,6 +217,56 @@ export interface ModelReport {
   >;
 }
 
+export type ReviewStatus = "PENDING" | "APPROVED" | "OVERRIDDEN" | "REJECTED";
+
+export interface ReviewOut {
+  id: string;
+  recovery_case_id: string;
+  source_external_id: string;
+  reason: string;
+  status: ReviewStatus;
+  proposed_strategy: string | null;
+  chosen_strategy: string | null;
+  explanation: string | null;
+  amount_at_risk: MoneyOut;
+  failure_category: string | null;
+  recoverability_score: number | null;
+  current_state: CaseState | null;
+  attempt_count: number;
+  reviewer: string | null;
+  decision_notes: string | null;
+  applied_rules: string[];
+  created_at: string;
+  resolved_at: string | null;
+}
+
+export interface ReviewListResponse {
+  items: ReviewOut[];
+  total: number;
+  limit: number;
+  offset: number;
+  pending: number;
+  value_awaiting_review: MoneyOut;
+  by_reason: Record<string, number>;
+}
+
+export interface PolicyResponse {
+  merchant_id: string;
+  max_automated_attempts: number;
+  cooldown_hours: number;
+  min_auto_action_confidence: number;
+  high_value_threshold_paise: number;
+  min_expected_net_recovery_paise: number;
+  backoff_base_hours: number;
+  backoff_cap_hours: number;
+  enabled_strategies: string[];
+  available_strategies: string[];
+}
+
+export type PolicyUpdate = Partial<
+  Omit<PolicyResponse, "merchant_id" | "available_strategies">
+>;
+
 export interface CaseFilters {
   state?: CaseState[];
   source_type?: string[];
@@ -300,6 +350,35 @@ export const api = {
     }>("/api/v1/metrics/interventions"),
 
   modelMetrics: () => request<ModelReport>("/api/v1/metrics/models"),
+
+  listReviews: (status: ReviewStatus = "PENDING") =>
+    request<ReviewListResponse>(`/api/v1/reviews?status=${status}`),
+
+  approveReview: (id: string, reviewer: string, notes: string) =>
+    request<ReviewOut>(`/api/v1/reviews/${id}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer, notes }),
+    }),
+
+  overrideReview: (id: string, reviewer: string, notes: string, strategy: string) =>
+    request<ReviewOut>(`/api/v1/reviews/${id}/override`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer, notes, strategy }),
+    }),
+
+  rejectReview: (id: string, reviewer: string, notes: string) =>
+    request<ReviewOut>(`/api/v1/reviews/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({ reviewer, notes }),
+    }),
+
+  getPolicies: () => request<PolicyResponse>("/api/v1/policies"),
+
+  updatePolicies: (update: PolicyUpdate) =>
+    request<PolicyResponse>("/api/v1/policies", {
+      method: "PUT",
+      body: JSON.stringify(update),
+    }),
 
   seed: (count = 120, reset = true) =>
     request<{

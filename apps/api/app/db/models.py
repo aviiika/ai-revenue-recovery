@@ -44,6 +44,8 @@ from app.domain.enums import (
     InterventionStrategy,
     OutcomeType,
     Recoverability,
+    ReviewReason,
+    ReviewStatus,
     SourceType,
     WebhookStatus,
 )
@@ -400,4 +402,60 @@ class WebhookEvent(Base):
     __table_args__ = (
         UniqueConstraint("provider", "event_id", name="webhook_provider_event_id"),
         Index("ix_webhook_events_type", "event_type", "received_at"),
+    )
+
+
+class HumanReview(Base):
+    """A case awaiting a person's decision (spec section 9, FR-3 Flow C).
+
+    Created when the policy engine escalates. Carries a frozen snapshot of the
+    decision the agent *would* have made, so a reviewer sees exactly what was
+    proposed even if policy config or the model changes before they get to it.
+
+    One open review per case: a second escalation updates the existing row
+    rather than stacking duplicates in the queue.
+    """
+
+    __tablename__ = "human_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUIDType, primary_key=True, default=uuid.uuid4)
+    recovery_case_id: Mapped[uuid.UUID] = mapped_column(
+        UUIDType, ForeignKey("recovery_cases.id", ondelete="CASCADE"), nullable=False
+    )
+
+    reason: Mapped[ReviewReason] = mapped_column(String(40), nullable=False)
+    status: Mapped[ReviewStatus] = mapped_column(
+        String(20), nullable=False, default=ReviewStatus.PENDING
+    )
+
+    # What the agent proposed, frozen at escalation time.
+    proposed_strategy: Mapped[InterventionStrategy | None] = mapped_column(
+        String(40), nullable=True
+    )
+    decision_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONBType, nullable=False, default=dict
+    )
+    #: Human-readable rationale. Template-generated, or LLM-written when one is
+    #: configured -- either way it explains a decision already made.
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Ranking the queue by money at stake, so reviewers see the big cases first.
+    amount_at_risk_paise: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+    reviewer: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    decision_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Set when the reviewer overrode the agent's choice.
+    chosen_strategy: Mapped[InterventionStrategy | None] = mapped_column(String(40), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    recovery_case: Mapped[RecoveryCase] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("amount_at_risk_paise >= 0", name="review_amount_non_negative"),
+        Index("ix_human_reviews_status", "status", "amount_at_risk_paise"),
+        Index("ix_human_reviews_case", "recovery_case_id"),
     )

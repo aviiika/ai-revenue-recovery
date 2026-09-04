@@ -189,7 +189,10 @@ def execute(
     operator. Executing anyway would spend money on a case that no longer wants
     it, and in the recovered case would contact someone who has already paid.
     """
-    if intervention.status is not InterventionStatus.PLANNED:
+    # Coerced rather than identity-compared: a String column round-trips as a
+    # plain str, so an identity check would wrongly treat a reloaded EXECUTED
+    # intervention as still PLANNED and run it a second time.
+    if InterventionStatus(intervention.status) is not InterventionStatus.PLANNED:
         # Already executed or skipped: replaying is a no-op, not an error.
         return ExecutionResult(
             intervention=intervention, executed=False, skipped_reason="already processed"

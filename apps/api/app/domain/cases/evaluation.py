@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.money import Money
 from app.db.models import Customer, Merchant, RecoveryCase
 from app.domain.audit import service as audit
@@ -231,13 +232,55 @@ def evaluate(
     # exactly where it is and will be picked up again once the window expires.
     # The POLICY_EVALUATED event above is still recorded, so the deferral itself
     # is auditable.
-    if decision.next_state is not None:
+    # A re-evaluated case can land on the state it is already in (an escalated
+    # case that escalates again). That is not a state change, and the state
+    # machine rightly refuses a self-transition -- so we simply do not ask.
+    if decision.next_state is not None and decision.next_state != case.current_state:
         cases.transition(
             session,
             case,
             decision.next_state,
             decision.explanation,
             actor_type=ActorType.SYSTEM,
+        )
+
+    if decision.next_state == CaseState.ESCALATED:
+        # An escalation with no queue entry is a case that silently disappears.
+        # The explanation is generated here so a reviewer sees prose, not a
+        # rule id -- and it degrades to a template when no LLM is configured.
+        from app.domain.reviews import service as reviews
+        from app.integrations.llm import provider as llm
+
+        written = llm.explain(
+            llm.ExplanationContext(
+                case_state=CaseState(case.current_state),
+                failure_category=FailureCategory(case.failure_category),
+                recoverability=recoverability,
+                amount_at_risk=Money(case.amount_at_risk_paise),
+                attempt_count=case.attempt_count,
+                probability=case.recoverability_score,
+                recommended_strategy=decision.recommended_strategy,
+                applied_rules=decision.applied_rules,
+                decisive_rule=decision.decisive_rule,
+                policy_explanation=decision.explanation,
+                provider_description=case.failure_reason_code,
+            ),
+            get_settings(),
+        )
+        reviews.open_review(session, case, decision, now=now, explanation=written.summary)
+        audit.record(
+            session,
+            case_id=case.id,
+            event_type=AuditEventType.EXPLANATION_GENERATED,
+            summary=f"Explanation written by {written.source}",
+            actor_type=ActorType.MODEL,
+            actor_id=written.source,
+            payload={
+                "source": written.source,
+                "summary": written.summary,
+                "evidence": written.evidence,
+                "uncertainty": written.uncertainty,
+            },
         )
 
     if decision.next_state == CaseState.ACTION_SELECTED:

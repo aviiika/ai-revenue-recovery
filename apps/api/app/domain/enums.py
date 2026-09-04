@@ -114,6 +114,24 @@ class WebhookStatus(StrEnum):
     FAILED = "FAILED"  # processing raised
 
 
+class ReviewStatus(StrEnum):
+    """Lifecycle of a human review task."""
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"  # reviewer let the agent's choice stand
+    OVERRIDDEN = "OVERRIDDEN"  # reviewer substituted a different strategy
+    REJECTED = "REJECTED"  # reviewer stopped the case outright
+
+
+class ReviewReason(StrEnum):
+    """Why a case needs a person. Mirrors the escalating policy rules."""
+
+    HIGH_VALUE_LOW_CONFIDENCE = "HIGH_VALUE_LOW_CONFIDENCE"
+    BELOW_CONFIDENCE_THRESHOLD = "BELOW_CONFIDENCE_THRESHOLD"
+    MAX_ATTEMPTS_REACHED = "MAX_ATTEMPTS_REACHED"
+    MANUAL = "MANUAL"
+
+
 class ExperimentArm(StrEnum):
     """Randomised assignment, for measuring incremental recovery.
 
@@ -149,6 +167,9 @@ class AuditEventType(StrEnum):
     TRANSITION_REJECTED = "TRANSITION_REJECTED"
     INTERVENTION_SKIPPED = "INTERVENTION_SKIPPED"
     SIMULATED_EVENT = "SIMULATED_EVENT"
+    REVIEW_CREATED = "REVIEW_CREATED"
+    EXPLANATION_GENERATED = "EXPLANATION_GENERATED"
+    POLICY_UPDATED = "POLICY_UPDATED"
 
 
 #: Deterministic mapping from failure category to recoverability prior.

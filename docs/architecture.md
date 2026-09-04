@@ -291,6 +291,48 @@ provider never contacts a real person on our behalf. Without credentials
 `build_provider` returns `None` and the orchestrator falls back to the simulator
 — the normal state of a fresh clone.
 
+## 6g. Human control, and where the LLM sits
+
+**Guardrails bind humans too.** A reviewer may overrule the agent's *judgement*
+— that is the point of the queue. They may not overrule an opt-out, resurrect a
+settled case, or select a strategy the merchant disabled. Those are compliance
+and correctness boundaries, not matters of opinion, and if a person could cross
+them the policy engine would be advisory rather than authoritative. Each is
+tested, including through the API.
+
+Rejecting is always available, even on a case where approving is blocked.
+Stopping is the safe direction, so it is never the thing that gets refused.
+
+Notes are mandatory on every decision. An override with no recorded reason is
+exactly the unexplained decision the audit trail exists to prevent, and every
+action is written with the reviewer's identity as `ActorType.HUMAN`.
+
+One open review per case: a second escalation refreshes the existing row rather
+than stacking duplicates, so queue length means *cases needing attention* rather
+than *passes the agent made*.
+
+**The LLM explains; it never decides.** By the time the explainer runs, the
+policy engine has already chosen from a closed enum. The structural guarantee is
+in the contract: `DecisionExplanation` has fields for summary, evidence,
+uncertainty and draft copy — and **no field for an action**. There is nowhere for
+a model to name one, so no prompt injection can make it choose.
+
+Three further properties:
+
+* **Template first.** `LLM_PROVIDER=none` is the default and the deterministic
+  `TemplateExplainer` is what every reviewer reads. It is not a stub — with no
+  key configured it is the whole product, so it writes real prose.
+* **Every failure degrades.** A missing key, timeout, rate limit or malformed
+  response yields a template explanation. An operator waiting on a review is
+  never blocked by an LLM outage.
+* **Untrusted text is fenced.** Provider-supplied strings go last in the prompt,
+  delimited and explicitly labelled as data, with the system prompt instructing
+  that instructions inside them be ignored. Structured validation is the
+  backstop: a response with an unexpected field is rejected outright.
+
+No LLM SDK was added. The Anthropic path uses the `httpx` already present, so
+the optional dependency costs nothing to a deployment that does not use it.
+
 ## 7. Idempotency
 
 Two layers, both already in place:
@@ -392,6 +434,12 @@ Named honestly rather than left to be discovered:
 - Webhook processing runs inline. It is fast and well inside the 5-second
   budget, but the durable record is the seam where it moves to the worker if it
   ever grows.
+- There is no authentication, so the reviewer identity on an audit record is
+  self-asserted. Real deployment needs an auth provider behind it; the audit
+  shape already carries the field.
+- Policy changes are validated but not versioned. An interventions's
+  `policy_snapshot` preserves what applied at decision time, so history stays
+  explicable, but there is no policy changelog.
 - The decision threshold (0.07) actions nearly every case, because the assumed
   intervention cost is small relative to the ticket. The policy engine's
   independent confidence floor is what actually restrains action.

@@ -35,10 +35,13 @@ and is fully auditable, end to end.**
 | Deterministic simulator, randomised holdout, incremental measurement | Done |
 | Agent vs baseline comparison; Celery worker wrapping the orchestrator | Done |
 | Razorpay test mode: Payment Links, webhook verification, dedup, health | Done |
+| Human review queue: approve / override / reject, fully audited | Done |
+| Policy settings API and screen, validated not clamped | Done |
+| LLM explanations with structured output and template fallback | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 199 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
-| Human review queue, LLM explanations, demo hardening | Not yet — see [Roadmap](#roadmap) |
+| 233 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| Demo hardening: E2E test, demo script, final metrics | Not yet — see [Roadmap](#roadmap) |
 
 ---
 
@@ -203,6 +206,27 @@ The frontend performs no money arithmetic and holds no policy logic. Amounts
 arrive pre-formatted from the backend, and every state, rule and probability the
 UI shows was computed server-side.
 
+## Human review and policy
+
+Escalated cases land in the review queue at <http://localhost:3000/reviews>,
+ordered by money at stake. A reviewer can **approve** the agent's proposal,
+**override** it with another permitted strategy, or **reject** and stop the case.
+Notes are mandatory and every decision is audited against the reviewer.
+
+Safety bounds are editable at <http://localhost:3000/policies> — attempt caps,
+cooldown, confidence floor, high-value threshold, backoff, and which actions are
+enabled at all. Values are **validated, not clamped**: an out-of-range setting is
+refused with the reason, so a limit you set is the limit you get.
+
+### LLM explanations (optional)
+
+Explanations default to deterministic templates. To use an LLM instead, set
+`LLM_PROVIDER=anthropic`, `LLM_API_KEY` and optionally `LLM_MODEL`. No SDK is
+required — the integration uses `httpx`, which is already a dependency.
+
+The LLM writes prose only. Its response schema has no field for an action, so it
+cannot change what the agent does, and any failure falls back to the template.
+
 ## Razorpay test mode
 
 The system runs fully without Razorpay credentials — the agent executes through
@@ -271,6 +295,11 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `POST` | `/api/v1/demo/run-full-cycle` | Act → observe → retry to convergence (gated) |
 | `POST` | `/api/v1/webhooks/razorpay` | Signed webhook intake, deduplicated |
 | `GET` | `/api/v1/integrations/health` | Integration status; never returns credentials |
+| `GET` | `/api/v1/reviews` | Human review queue, largest exposure first |
+| `POST` | `/api/v1/reviews/{id}/approve` | Let the agent's proposal stand |
+| `POST` | `/api/v1/reviews/{id}/override` | Substitute a permitted strategy |
+| `POST` | `/api/v1/reviews/{id}/reject` | Stop the case |
+| `GET` `PUT` | `/api/v1/policies` | Read and update the agent's safety bounds |
 | `POST` | `/api/v1/demo/seed` | Seed deterministic synthetic cases (gated) |
 | `POST` | `/api/v1/demo/reset` | Delete synthetic cases only (gated) |
 
@@ -309,15 +338,19 @@ These are not stylistic preferences; they are checked by tests.
 - **Outcome fields are never model features.** A leakage guard fails the training
   run if one appears, and a test asserts the guard itself fires.
 - **The system degrades rather than crashes.** A missing, corrupt, or
-  unimportable model falls back to the deterministic scorer.
+  unimportable model falls back to the deterministic scorer; an unavailable LLM
+  falls back to deterministic templates.
+- **Guardrails bind humans too.** A reviewer can overrule the agent's judgement
+  but not an opt-out, a settled case, or a merchant-disabled strategy.
+- **The LLM has no field in which to name an action.** It writes explanations;
+  the policy engine decides.
 - **Synthetic data is labelled everywhere** it appears, including in API responses.
 
 ## Roadmap
 
 Slice 1 is done. Remaining milestones, in order:
 
-1. **Human review queue** — approve, override, stop, escalate
-2. **Demo hardening** — end-to-end tests, demo script, final metrics
+1. **Demo hardening** — end-to-end tests, demo script, final metrics
 
 ## Licence and data
 

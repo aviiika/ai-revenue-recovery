@@ -22,6 +22,8 @@ from app.domain.enums import (
     FailureCategory,
     InterventionStrategy,
     Recoverability,
+    ReviewReason,
+    ReviewStatus,
     SourceType,
 )
 
@@ -270,3 +272,75 @@ class SimulateOutcomesResponse(BaseModel):
     treatment_recovered: int
     holdout_observed: int
     holdout_recovered: int
+
+
+class ReviewOut(BaseModel):
+    """One row of the human review queue."""
+
+    id: uuid.UUID
+    recovery_case_id: uuid.UUID
+    source_external_id: str
+    reason: ReviewReason
+    status: ReviewStatus
+    proposed_strategy: InterventionStrategy | None
+    chosen_strategy: InterventionStrategy | None
+    #: Prose rationale. Template-written by default, LLM-written when configured.
+    explanation: str | None
+    amount_at_risk: MoneyOut
+    failure_category: FailureCategory | None
+    recoverability_score: float | None
+    current_state: CaseState | None
+    attempt_count: int
+    reviewer: str | None
+    decision_notes: str | None
+    applied_rules: list[str]
+    created_at: datetime
+    resolved_at: datetime | None
+
+
+class ReviewListResponse(BaseModel):
+    items: list[ReviewOut]
+    total: int
+    limit: int
+    offset: int
+    pending: int
+    value_awaiting_review: MoneyOut
+    by_reason: dict[str, int]
+
+
+class ReviewActionRequest(BaseModel):
+    reviewer: str = Field(min_length=1, max_length=120)
+    notes: str = Field(min_length=1, max_length=1000)
+
+
+class ReviewOverrideRequest(ReviewActionRequest):
+    #: Must be one the merchant has enabled; the API rejects anything else.
+    strategy: InterventionStrategy
+
+
+class PolicyResponse(BaseModel):
+    merchant_id: uuid.UUID
+    max_automated_attempts: int
+    cooldown_hours: int
+    min_auto_action_confidence: float
+    high_value_threshold_paise: int
+    min_expected_net_recovery_paise: int
+    backoff_base_hours: int
+    backoff_cap_hours: int
+    enabled_strategies: list[InterventionStrategy]
+    available_strategies: list[InterventionStrategy]
+
+
+class PolicyUpdateRequest(BaseModel):
+    """Partial update. Only supplied fields change; the rest are preserved."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_automated_attempts: int | None = None
+    cooldown_hours: int | None = None
+    min_auto_action_confidence: float | None = None
+    high_value_threshold_paise: int | None = None
+    min_expected_net_recovery_paise: int | None = None
+    backoff_base_hours: int | None = None
+    backoff_cap_hours: int | None = None
+    enabled_strategies: list[InterventionStrategy] | None = None
