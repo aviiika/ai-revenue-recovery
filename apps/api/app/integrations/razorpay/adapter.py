@@ -32,6 +32,7 @@ import httpx
 from app.core.config import Settings
 from app.db.models import RecoveryCase
 from app.domain.enums import InterventionStrategy
+from app.domain.interventions.service import ProviderError
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,13 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 LINK_VALIDITY = timedelta(days=7)
 
 
-class RazorpayError(Exception):
-    """Raised when the Razorpay API rejects or fails a request."""
+class RazorpayError(ProviderError):
+    """Raised when the Razorpay API rejects or fails a request.
+
+    Subclasses the domain's :class:`ProviderError` so the intervention executor
+    records the failure and leaves the case retryable, instead of the error
+    escaping as an unhandled 500 and losing the attempt.
+    """
 
     def __init__(self, message: str, status_code: int | None = None) -> None:
         self.status_code = status_code

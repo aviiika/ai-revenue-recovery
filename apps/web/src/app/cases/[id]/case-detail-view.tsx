@@ -3,7 +3,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
-import { api, type AuditEventOut } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type AuditEventOut,
+  type CaseDetail,
+  type InterventionOut,
+} from "@/lib/api";
 import {
   ActorBadge,
   ConfidenceBadge,
@@ -30,6 +36,11 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
     onSuccess: () => queryClient.invalidateQueries(),
   });
 
+  const execute = useMutation({
+    mutationFn: () => api.executeIntervention(caseId),
+    onSuccess: () => queryClient.invalidateQueries(),
+  });
+
   const stop = useMutation({
     mutationFn: (reason: string) => api.stopCase(caseId, reason, "operator"),
     onSuccess: () => {
@@ -47,6 +58,15 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
   const isTerminal = ["RECOVERED", "STOPPED", "EXHAUSTED"].includes(
     data.current_state,
   );
+  const selected = data.selected_strategy;
+  // Execution is offered only where policy has chosen an action and the case is
+  // still live. An already-recovered case must never get a second link.
+  const canExecute = Boolean(selected) && !isTerminal;
+  // The most recent attempt that actually produced a provider result.
+  const paymentLink =
+    [...data.interventions]
+      .reverse()
+      .find((i) => i.status === "EXECUTED" || i.status === "FAILED") ?? null;
 
   return (
     <div className="space-y-4">
@@ -170,6 +190,8 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
             </Panel>
           ) : null}
 
+          {paymentLink ? <PaymentLinkPanel case={data} intervention={paymentLink} /> : null}
+
           <Panel title="Operator actions">
             <p className="text-2xs text-[var(--color-ink-secondary)]">
               Legal next states:{" "}
@@ -181,6 +203,44 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
             </p>
 
             <div className="mt-3 space-y-2">
+              {selected ? (
+                <div className="rounded border border-[var(--color-border)] bg-[var(--color-surface-sunken)] p-2.5">
+                  <div className="text-2xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+                    Selected intervention
+                  </div>
+                  <div className="mt-0.5 text-sm font-medium">
+                    {selected.replace(/_/g, " ")}
+                  </div>
+                  {data.expected_net_paise !== null ? (
+                    <>
+                      <div className="mt-1.5 text-2xs uppercase tracking-wide text-[var(--color-ink-muted)]">
+                        Expected net recovery
+                      </div>
+                      <div className="tabular text-sm">
+                        {`INR ${(data.expected_net_paise / 100).toLocaleString("en-IN")}`}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Only offered when policy has actually selected an action, so
+                  the button can never imply an approval that did not happen. */}
+              {canExecute ? (
+                <button
+                  type="button"
+                  onClick={() => execute.mutate()}
+                  disabled={execute.isPending}
+                  className="w-full rounded border-2 border-[var(--color-progress-border)] bg-[var(--color-progress-surface)] px-3 py-2 text-xs font-semibold text-[var(--color-progress)] hover:opacity-90 disabled:opacity-40"
+                >
+                  {execute.isPending
+                    ? "Creating…"
+                    : selected === "CREATE_PAYMENT_LINK"
+                      ? "Create Razorpay Payment Link"
+                      : `Execute ${selected?.replace(/_/g, " ").toLowerCase()}`}
+                </button>
+              ) : null}
+
               <button
                 type="button"
                 onClick={() => evaluate.mutate()}
@@ -212,6 +272,30 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
               {evaluate.error ? (
                 <p className="text-2xs text-[var(--color-risk)]">
                   {(evaluate.error as Error).message}
+                </p>
+              ) : null}
+              {/* A 409 is the policy engine refusing — a cooldown, an
+                  escalation, an already-recovered case. That is the agent
+                  working, not Razorpay failing, and conflating the two would
+                  tell the operator the opposite of what happened. */}
+              {execute.error ? (
+                execute.error instanceof ApiError &&
+                execute.error.status === 409 ? (
+                  <p className="text-2xs text-[var(--color-escalated)]">
+                    Not executed — {execute.error.reason}
+                  </p>
+                ) : (
+                  <p className="text-2xs text-[var(--color-risk)]">
+                    Payment Link creation failed —{" "}
+                    {execute.error instanceof ApiError
+                      ? execute.error.reason
+                      : (execute.error as Error).message}
+                  </p>
+                )
+              ) : null}
+              {execute.data && !execute.data.executed ? (
+                <p className="text-2xs text-[var(--color-escalated)]">
+                  Not executed — {execute.data.reason}
                 </p>
               ) : null}
             </div>
@@ -311,5 +395,156 @@ function Row({
       </dt>
       <dd className="text-right">{children}</dd>
     </div>
+  );
+}
+
+/**
+ * The Razorpay Payment Link, once one has been created.
+ *
+ * Two rules this component exists to enforce visually:
+ *
+ * 1. **A link is not a recovery.** Status reads "Awaiting payment" until a
+ *    payment event actually settles the case. Creating the link changes
+ *    nothing about recovered revenue, and the panel says so.
+ * 2. **Never show a fabricated URL.** The link is rendered only when the
+ *    provider returned a real `short_url`. A simulated execution says exactly
+ *    that instead, so a demo cannot pass the simulator off as Razorpay.
+ */
+export function PaymentLinkPanel({
+  case: detail,
+  intervention,
+}: {
+  case: CaseDetail;
+  intervention: InterventionOut;
+}) {
+  const result = intervention.result ?? {};
+  const shortUrl =
+    typeof result.short_url === "string" ? result.short_url : null;
+  const linkId =
+    typeof result.payment_link_id === "string" ? result.payment_link_id : null;
+  const simulated = result.simulated !== false;
+  const failed = intervention.status === "FAILED";
+  const recovered = detail.current_state === "RECOVERED";
+
+  if (failed) {
+    return (
+      <section className="rounded-md border border-[var(--color-risk-border)] bg-[var(--color-risk-surface)] p-4">
+        <h2 className="text-sm font-semibold text-[var(--color-risk)]">
+          Payment Link creation failed
+        </h2>
+        <p className="mt-1 text-xs text-[var(--color-ink-secondary)]">
+          {String(result.error ?? "The provider rejected the request.")}
+        </p>
+        <p className="mt-2 text-2xs text-[var(--color-ink-muted)]">
+          The failure is recorded in the audit timeline and the case was not
+          advanced, so it can be retried.
+        </p>
+      </section>
+    );
+  }
+
+  if (intervention.strategy !== "CREATE_PAYMENT_LINK") {
+    return (
+      <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+        <h2 className="text-sm font-semibold">Executed action</h2>
+        <p className="mt-1 text-xs text-[var(--color-ink-secondary)]">
+          {intervention.strategy.replace(/_/g, " ").toLowerCase()} ·{" "}
+          {intervention.channel}
+        </p>
+        {typeof result.would_send === "string" ? (
+          <p className="mt-2 text-2xs text-[var(--color-ink-muted)]">
+            Would send: {result.would_send}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className={
+        recovered
+          ? "rounded-md border-2 border-[var(--color-recovered-border)] bg-[var(--color-recovered-surface)] p-4"
+          : "rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface)] p-4"
+      }
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h2 className="text-sm font-semibold">Razorpay Payment Link</h2>
+        <span
+          className={
+            simulated
+              ? "rounded border border-[var(--color-escalated-border)] bg-[var(--color-escalated-surface)] px-1.5 py-0.5 text-2xs font-medium text-[var(--color-escalated)]"
+              : "rounded border border-[var(--color-progress-border)] bg-[var(--color-progress-surface)] px-1.5 py-0.5 text-2xs font-medium text-[var(--color-progress)]"
+          }
+        >
+          {simulated ? "SIMULATED" : "RAZORPAY TEST MODE"}
+        </span>
+      </div>
+
+      <dl className="mt-3 space-y-2 text-sm">
+        <Row label="Status">
+          <span
+            className={
+              recovered
+                ? "text-sm font-semibold text-[var(--color-recovered)]"
+                : "text-sm"
+            }
+          >
+            {recovered ? "PAID" : "Awaiting payment"}
+          </span>
+        </Row>
+        <Row label="Amount">
+          <MoneyAmount value={detail.amount_at_risk} />
+        </Row>
+      </dl>
+
+      {recovered ? (
+        <p className="mt-3 rounded bg-[var(--color-surface)] px-2.5 py-2 text-sm font-semibold text-[var(--color-recovered)]">
+          ✓ Revenue recovered: {detail.recovered_amount.formatted}
+        </p>
+      ) : null}
+
+      {shortUrl ? (
+        <a
+          href={shortUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 block w-full rounded border-2 border-[var(--color-progress-border)] bg-[var(--color-progress-surface)] px-3 py-2 text-center text-xs font-semibold text-[var(--color-progress)] hover:opacity-90"
+        >
+          Open Payment Link
+        </a>
+      ) : (
+        <p className="mt-3 rounded border border-dashed border-[var(--color-border-strong)] px-2.5 py-2 text-2xs text-[var(--color-ink-secondary)]">
+          No live link: this ran through the simulator because Razorpay
+          credentials are not configured. Set RAZORPAY_KEY_ID and
+          RAZORPAY_KEY_SECRET to create a real test-mode link.
+        </p>
+      )}
+
+      <dl className="mt-3 space-y-1.5">
+        {linkId ? (
+          <Row label="Payment Link ID">
+            <code className="font-mono text-2xs">{linkId}</code>
+          </Row>
+        ) : null}
+        <Row label="Created">
+          <span className="text-2xs">
+            {intervention.executed_at
+              ? new Date(intervention.executed_at).toLocaleString("en-IN")
+              : "—"}
+          </span>
+        </Row>
+        <Row label="Attempt">
+          <span className="tabular text-2xs">#{intervention.attempt_number}</span>
+        </Row>
+      </dl>
+
+      {!recovered ? (
+        <p className="mt-3 text-2xs text-[var(--color-ink-muted)]">
+          Creating a link is not a recovery. This case becomes RECOVERED only
+          when a payment event confirms the customer actually paid.
+        </p>
+      ) : null}
+    </section>
   );
 }

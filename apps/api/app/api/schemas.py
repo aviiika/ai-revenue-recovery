@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +21,7 @@ from app.domain.enums import (
     AuditEventType,
     CaseState,
     FailureCategory,
+    InterventionStatus,
     InterventionStrategy,
     Recoverability,
     ReviewReason,
@@ -92,11 +94,46 @@ class AuditEventOut(BaseModel):
     created_at: datetime
 
 
+class InterventionOut(BaseModel):
+    """One executed or planned action against a case.
+
+    ``result`` is the provider's own response, verbatim. For a live Razorpay
+    execution that carries the real ``payment_link_id`` and ``short_url``; for a
+    simulated one it carries the message that *would* have been sent. The UI
+    reads ``simulated`` to label which path produced it, so a demo can never
+    pass a simulated action off as a real payment link.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    strategy: InterventionStrategy
+    status: InterventionStatus
+    channel: str
+    attempt_number: int
+    idempotency_key: str
+    estimated_cost_paise: int
+    planned_at: datetime
+    executed_at: datetime | None
+    result: dict[str, Any]
+
+    @property
+    def payment_link_url(self) -> str | None:
+        value = self.result.get("short_url")
+        return str(value) if value else None
+
+
 class CaseDetail(CaseSummary):
     """Case plus its complete audit trail (spec FR-10 explainability)."""
 
     audit_trail: list[AuditEventOut]
     allowed_transitions: list[CaseState]
+    #: Every action planned or executed against this case, oldest first.
+    interventions: list[InterventionOut] = Field(default_factory=list)
+    #: What policy would do next, when the case is sitting on a selected action.
+    #: Lets the UI offer the right button without re-deriving policy client-side.
+    selected_strategy: InterventionStrategy | None = None
+    expected_net_paise: int | None = None
 
 
 class CaseListResponse(BaseModel):
@@ -346,3 +383,21 @@ class PolicyUpdateRequest(BaseModel):
     backoff_base_hours: int | None = None
     backoff_cap_hours: int | None = None
     enabled_strategies: list[InterventionStrategy] | None = None
+
+
+class ExecuteInterventionResponse(BaseModel):
+    """Result of executing the policy-selected action for one case."""
+
+    case: CaseSummary
+    intervention: InterventionOut | None
+    executed: bool
+    #: Present when execution was refused or skipped -- an already-recovered
+    #: case, an opt-out arriving after planning, a cooldown, or a provider
+    #: failure. Shown to the operator verbatim.
+    reason: str | None
+    #: False when a real Razorpay test-mode call was made, true for the
+    #: simulator. The UI must surface this so the two paths are never confused.
+    simulated: bool
+    strategy: InterventionStrategy | None
+    payment_link_url: str | None
+    payment_link_id: str | None

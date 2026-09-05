@@ -23,6 +23,22 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+
+  /**
+   * The API's own explanation, when it sent one.
+   *
+   * FastAPI puts the useful sentence in `detail`, so without this the UI would
+   * show "POST /… failed (409)" and hide the actual reason — which for a
+   * refused action is the one thing the operator needs to read.
+   */
+  get reason(): string {
+    const detail = this.detail;
+    if (detail && typeof detail === "object" && "detail" in detail) {
+      const inner = (detail as { detail: unknown }).detail;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return this.message;
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -124,9 +140,39 @@ export interface AuditEventOut {
   created_at: string;
 }
 
+export interface InterventionOut {
+  id: string;
+  strategy: string;
+  status: "PLANNED" | "EXECUTED" | "FAILED" | "SKIPPED";
+  channel: string;
+  attempt_number: number;
+  idempotency_key: string;
+  estimated_cost_paise: number;
+  planned_at: string;
+  executed_at: string | null;
+  /** The provider's own response. Carries short_url / payment_link_id for a
+   *  live Razorpay execution, and `simulated: true` for the simulator. */
+  result: Record<string, unknown>;
+}
+
 export interface CaseDetail extends CaseSummary {
   audit_trail: AuditEventOut[];
   allowed_transitions: CaseState[];
+  interventions: InterventionOut[];
+  selected_strategy: string | null;
+  expected_net_paise: number | null;
+}
+
+export interface ExecuteInterventionResponse {
+  case: CaseSummary;
+  intervention: InterventionOut | null;
+  executed: boolean;
+  reason: string | null;
+  /** False only when a real Razorpay test-mode call was made. */
+  simulated: boolean;
+  strategy: string | null;
+  payment_link_url: string | null;
+  payment_link_id: string | null;
 }
 
 export interface CaseListResponse {
@@ -312,6 +358,11 @@ export const api = {
       decision: PolicyDecisionOut;
       model_version: string;
     }>(`/api/v1/cases/${id}/evaluate`, { method: "POST" }),
+
+  executeIntervention: (id: string) =>
+    request<ExecuteInterventionResponse>(`/api/v1/cases/${id}/execute`, {
+      method: "POST",
+    }),
 
   stopCase: (id: string, reason: string, reviewer?: string) =>
     request<CaseSummary>(`/api/v1/cases/${id}/stop`, {

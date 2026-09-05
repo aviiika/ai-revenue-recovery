@@ -45,6 +45,17 @@ class InterventionError(Exception):
     """Raised when an intervention cannot be planned or executed."""
 
 
+class ProviderError(Exception):
+    """Raised by a :class:`PaymentProvider` when the external side fails.
+
+    Part of the Protocol's contract rather than an integration detail: the
+    executor has to distinguish "the provider refused or was unreachable" --
+    which is recoverable, recorded, and retryable -- from a bug in our own code,
+    which must not be swallowed. Adapters raise a subclass of this; the domain
+    never imports the adapters.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionResult:
     """Outcome of attempting one intervention."""
@@ -230,7 +241,7 @@ def execute(
         )
         intervention.status = InterventionStatus.EXECUTED
         intervention.result = dict(result)
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (ProviderError, OSError, ValueError, RuntimeError) as exc:
         # A provider failure must not lose the case. The row records the
         # failure and the case stays where it is, so a later pass can retry.
         intervention.status = InterventionStatus.FAILED

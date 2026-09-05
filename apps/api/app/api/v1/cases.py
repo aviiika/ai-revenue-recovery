@@ -21,18 +21,28 @@ from app.api.schemas import (
     EvaluateBatchRequest,
     EvaluateBatchResponse,
     EvaluateResponse,
+    ExecuteInterventionResponse,
+    InterventionOut,
     MoneyOut,
     PolicyDecisionOut,
     ScoredStrategyOut,
     StopRequest,
 )
 from app.core.money import Money
-from app.db.models import Customer, Merchant, RecoveryCase
+from app.db.models import Customer, Intervention, Merchant, RecoveryCase
 from app.domain.audit import service as audit
 from app.domain.cases import evaluation, state_machine
 from app.domain.cases import service as cases
 from app.domain.cases.service import DuplicateCaseError, NewCaseInput
-from app.domain.enums import CaseState, FailureCategory, SourceType
+from app.domain.enums import (
+    AuditEventType,
+    CaseState,
+    FailureCategory,
+    InterventionStrategy,
+    SourceType,
+)
+from app.domain.interventions import service as interventions
+from app.domain.orchestrator import service as orchestrator
 from app.domain.policies.engine import PolicyDecision
 
 router = APIRouter(prefix="/cases", tags=["cases"])
@@ -116,10 +126,37 @@ def get_case(case_id: uuid.UUID, session: Session = Depends(get_db)) -> CaseDeta
 
     trail = audit.get_trail(session, case.id)
     summary = CaseSummary.from_model(case)
+
+    rows = (
+        session.execute(
+            select(Intervention)
+            .where(Intervention.recovery_case_id == case.id)
+            .order_by(Intervention.attempt_number)
+        )
+        .scalars()
+        .all()
+    )
+
+    # The action policy last selected, read from the audit trail rather than
+    # recomputed, so the page shows what was actually decided.
+    selected: InterventionStrategy | None = None
+    expected_net: int | None = None
+    for event in reversed(trail):
+        if event.event_type == AuditEventType.INTERVENTION_SELECTED:
+            raw = event.payload.get("strategy")
+            if raw:
+                selected = InterventionStrategy(str(raw))
+            net = event.payload.get("expected_net_paise")
+            expected_net = int(net) if isinstance(net, int) else None
+            break
+
     return CaseDetail(
         **summary.model_dump(),
         audit_trail=[AuditEventOut.model_validate(event) for event in trail],
         allowed_transitions=sorted(state_machine.allowed_targets(CaseState(case.current_state))),
+        interventions=[InterventionOut.model_validate(row) for row in rows],
+        selected_strategy=selected,
+        expected_net_paise=expected_net,
     )
 
 
@@ -311,4 +348,95 @@ def evaluate_batch(
         total_at_risk=MoneyOut.of(total_at_risk.paise),
         total_expected_net_paise=total_expected_net,
         by_rule=dict(sorted(by_rule.items())),
+    )
+
+
+def _latest_intervention(session: Session, case_id: uuid.UUID) -> Intervention | None:
+    return session.execute(
+        select(Intervention)
+        .where(Intervention.recovery_case_id == case_id)
+        .order_by(Intervention.attempt_number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+@router.post("/{case_id}/execute", response_model=ExecuteInterventionResponse)
+def execute_intervention(
+    case_id: uuid.UUID, session: Session = Depends(get_db)
+) -> ExecuteInterventionResponse:
+    """Execute the action the policy engine has selected for this case.
+
+    Exposes the execution path that already existed inside batch orchestration,
+    so an operator can drive one case from the dashboard. It adds no recovery
+    logic of its own -- it reuses ``evaluation.evaluate`` to obtain the current
+    decision, ``interventions.plan`` to create the attempt, and
+    ``interventions.execute`` to run it through the configured provider.
+
+    Three properties inherited rather than reimplemented:
+
+    * **The policy engine still decides.** This endpoint executes whatever
+      policy selected; it cannot force an action policy refused.
+    * **Idempotent.** ``plan`` returns the existing attempt for the same
+      ``(case, attempt)`` and ``execute`` is a no-op once an attempt has run, so
+      a double-clicked button cannot create two payment links.
+    * **Creating a link is not a recovery.** Execution moves the case to
+      OBSERVING. Only a payment event -- real webhook or simulator -- records
+      money against it.
+    """
+    try:
+        case = cases.get(session, case_id)
+    except cases.CaseNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    merchant = session.get(Merchant, case.merchant_id)
+    if merchant is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Case has no owning merchant"
+        )
+
+    if case.current_state == CaseState.RECOVERED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Case is already recovered; no further action will be taken",
+        )
+
+    # Ask the policy engine what it wants done now. Re-evaluating an
+    # already-selected case is safe: the evaluator skips the transition when the
+    # decision matches the current state.
+    try:
+        outcome = evaluation.evaluate(session, case, merchant, now=datetime.now(UTC))
+    except evaluation.NotEvaluableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    decision = outcome.decision
+    if decision.next_state != CaseState.ACTION_SELECTED:
+        # Policy declined to act -- escalated, stopped, or deferred by cooldown.
+        # Surfacing its own words keeps the UI from inventing a reason.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Policy did not select an executable action: {decision.explanation}"
+                + (f" (rule {decision.decisive_rule})" if decision.decisive_rule else "")
+            ),
+        )
+
+    intervention = interventions.plan(session, case, decision, now=datetime.now(UTC))
+    execution = interventions.execute(
+        session,
+        intervention,
+        merchant,
+        orchestrator.default_provider(),
+        now=datetime.now(UTC),
+    )
+
+    result = dict(execution.intervention.result or {})
+    return ExecuteInterventionResponse(
+        case=CaseSummary.from_model(case),
+        intervention=InterventionOut.model_validate(execution.intervention),
+        executed=execution.executed,
+        reason=execution.skipped_reason,
+        simulated=bool(result.get("simulated", True)),
+        strategy=InterventionStrategy(execution.intervention.strategy),
+        payment_link_url=(str(result["short_url"]) if result.get("short_url") else None),
+        payment_link_id=(str(result["payment_link_id"]) if result.get("payment_link_id") else None),
     )

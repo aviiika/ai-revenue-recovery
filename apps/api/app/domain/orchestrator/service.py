@@ -28,7 +28,7 @@ from app.domain.interventions.service import PaymentProvider, SimulatedProvider
 from app.domain.simulator import service as simulator
 
 
-def _default_provider() -> PaymentProvider:
+def default_provider() -> PaymentProvider:
     """Use Razorpay test mode when credentials exist, else simulate.
 
     Falling back rather than failing is deliberate: a fresh clone has no keys
@@ -109,7 +109,7 @@ def run_batch(
     comparison — but never planned or executed. Withholding treatment is the
     entire point of the arm.
     """
-    active_provider = provider if provider is not None else _default_provider()
+    active_provider = provider if provider is not None else default_provider()
     result = BatchResult()
 
     pending = (
