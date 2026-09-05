@@ -37,6 +37,7 @@ NUMERIC_FEATURES: list[str] = [
     "prior_successful_payments",
     "prior_failed_payments",
     "subscription_age_days",
+    "days_overdue",
     "hour_of_day",
     "day_of_week",
     "is_overnight",
@@ -50,6 +51,7 @@ CATEGORICAL_FEATURES: list[str] = [
     "payment_method",
     "customer_segment",
     "source_type",
+    "checkout_stage",
 ]
 
 ALL_FEATURES: list[str] = NUMERIC_FEATURES + CATEGORICAL_FEATURES
@@ -63,6 +65,12 @@ DEFAULTS: dict[str, Any] = {
     "prior_successful_payments": 0,
     "prior_failed_payments": 0,
     "subscription_age_days": 0,
+    # 0 days overdue is correct for anything that is not an invoice: there
+    # is no due date to be past.
+    "days_overdue": 0,
+    # NOT_APPLICABLE rather than a stage name, so the model can tell a
+    # non-checkout case apart from one abandoned at the cart.
+    "checkout_stage": "NOT_APPLICABLE",
 }
 
 
@@ -87,6 +95,8 @@ class ScoringContext:
     prior_successful_payments: int = 0
     prior_failed_payments: int = 0
     subscription_age_days: int | None = None
+    days_overdue: int | None = None
+    checkout_stage: str | None = None
 
 
 def _derive(row: dict[str, Any]) -> dict[str, Any]:
@@ -142,6 +152,8 @@ def context_to_row(context: ScoringContext) -> dict[str, Any]:
         "prior_successful_payments": context.prior_successful_payments,
         "prior_failed_payments": context.prior_failed_payments,
         "subscription_age_days": context.subscription_age_days,
+        "days_overdue": context.days_overdue,
+        "checkout_stage": context.checkout_stage,
     }
     return {key: value for key, value in _derive(row).items() if key in ALL_FEATURES}
 

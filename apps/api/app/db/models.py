@@ -154,6 +154,12 @@ class RecoveryCase(Base):
     # cannot drift apart.
     payment_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
     subscription_age_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Receivables: days past the due date. The dominant driver of whether an
+    # invoice is ever collected.
+    days_overdue: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Checkout: how far the customer got before leaving. Someone who reached the
+    # OTP screen is a very different prospect from someone who left at the cart.
+    checkout_stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     current_state: Mapped[CaseState] = mapped_column(

@@ -166,6 +166,8 @@ def ingest_batch(
                     attempt_count=item.attempt_count,
                     payment_method=item.payment_method,
                     subscription_age_days=item.subscription_age_days,
+                    days_overdue=item.days_overdue,
+                    checkout_stage=item.checkout_stage,
                 ),
             )
         except DuplicateCaseError:

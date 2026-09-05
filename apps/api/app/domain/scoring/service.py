@@ -92,6 +92,24 @@ ACTIONABLE_STRATEGIES: tuple[InterventionStrategy, ...] = (
     InterventionStrategy.CREATE_PAYMENT_LINK,
 )
 
+#: Source types where there is no charge to retry.
+#:
+#: An abandoned checkout was never charged -- the customer left before paying --
+#: and an overdue invoice has no failed authorisation behind it. Offering
+#: WAIT_AND_RETRY for either would be scoring an action that cannot physically
+#: happen, so those cases are only ever offered contact-based strategies.
+NO_RETRY_SOURCES: frozenset[str] = frozenset({"CHECKOUT", "INVOICE"})
+
+
+def candidate_strategies(source_type: str) -> tuple[InterventionStrategy, ...]:
+    """The strategies worth scoring for a given kind of revenue at risk."""
+    if source_type in NO_RETRY_SOURCES:
+        return tuple(
+            s for s in ACTIONABLE_STRATEGIES if s is not InterventionStrategy.WAIT_AND_RETRY
+        )
+    return ACTIONABLE_STRATEGIES
+
+
 DETERMINISTIC_MODEL_VERSION = "deterministic-baseline-v1"
 
 
@@ -141,6 +159,8 @@ class CaseFeatures:
     prior_successful_payments: int = 0
     prior_failed_payments: int = 0
     subscription_age_days: int | None = None
+    days_overdue: int | None = None
+    checkout_stage: str | None = None
     detected_at: datetime | None = None
 
     @property
@@ -240,15 +260,22 @@ def score_strategy(
 def score_all(
     scorer: RecoveryScorer,
     features: CaseFeatures,
-    strategies: tuple[InterventionStrategy, ...] = ACTIONABLE_STRATEGIES,
+    strategies: tuple[InterventionStrategy, ...] | None = None,
 ) -> list[ScoredStrategy]:
     """Score every candidate strategy, best expected net value first.
 
     Ranking here is advisory. The policy engine still has the final word and may
     reject the top-ranked option outright.
+
+    When ``strategies`` is omitted the candidate set is chosen from the source
+    type, so an abandoned checkout or an overdue invoice is never scored for a
+    retry that has no charge behind it.
     """
+    candidates = (
+        strategies if strategies is not None else candidate_strategies(features.source_type)
+    )
     scored = [
-        score_strategy(scorer, strategy=strategy, features=features) for strategy in strategies
+        score_strategy(scorer, strategy=strategy, features=features) for strategy in candidates
     ]
     # Ties broken by strategy name so the ordering is fully deterministic.
     scored.sort(key=lambda s: (-s.expected_net.paise, s.strategy))

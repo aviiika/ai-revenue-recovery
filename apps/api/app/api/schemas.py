@@ -124,6 +124,8 @@ class NewCaseRequest(BaseModel):
     attempt_count: int = Field(default=0, ge=0, description="Attempts already made upstream.")
     payment_method: str | None = Field(default=None, max_length=20)
     subscription_age_days: int | None = Field(default=None, ge=0)
+    days_overdue: int | None = Field(default=None, ge=0)
+    checkout_stage: str | None = Field(default=None, max_length=20)
 
     @field_validator("detected_at")
     @classmethod

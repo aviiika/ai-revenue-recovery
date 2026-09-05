@@ -57,6 +57,10 @@ class FailureCategory(StrEnum):
     LIMIT_EXCEEDED = "LIMIT_EXCEEDED"
     MANDATE_REVOKED = "MANDATE_REVOKED"
     CUSTOMER_ABANDONED = "CUSTOMER_ABANDONED"
+    # B2B receivables: an invoice was issued and has passed its due date.
+    # Not a payment *failure* -- nothing was attempted -- but it is revenue
+    # at risk, and it is what a receivables chaser works on.
+    INVOICE_OVERDUE = "INVOICE_OVERDUE"
     UNKNOWN = "UNKNOWN"
 
 
@@ -185,6 +189,7 @@ CATEGORY_RECOVERABILITY: dict[FailureCategory, Recoverability] = {
     FailureCategory.LIMIT_EXCEEDED: Recoverability.ACTIONABLE,
     FailureCategory.MANDATE_REVOKED: Recoverability.STRUCTURAL,
     FailureCategory.CUSTOMER_ABANDONED: Recoverability.ACTIONABLE,
+    FailureCategory.INVOICE_OVERDUE: Recoverability.ACTIONABLE,
     # An unknown reason code is treated as ACTIONABLE rather than
     # UNRECOVERABLE: we would rather route it to a human than silently write
     # off revenue we never diagnosed.

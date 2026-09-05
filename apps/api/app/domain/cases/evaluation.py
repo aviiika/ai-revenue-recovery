@@ -158,6 +158,8 @@ def evaluate(
         source_type=str(case.source_type),
         payment_method=case.payment_method,
         subscription_age_days=case.subscription_age_days,
+        days_overdue=case.days_overdue,
+        checkout_stage=case.checkout_stage,
         detected_at=case.detected_at,
         customer_segment=customer.segment if customer else None,
         customer_tenure_days=customer.tenure_days if customer else 0,

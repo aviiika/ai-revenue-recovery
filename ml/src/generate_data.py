@@ -68,7 +68,38 @@ REASON_CODES: dict[str, list[str]] = {
     "NETWORK_TIMEOUT": ["GATEWAY_TIMEOUT"],
     "LIMIT_EXCEEDED": ["GATEWAY_LIMIT_EXCEEDED"],
     "MANDATE_REVOKED": ["BAD_REQUEST_MANDATE_REVOKED", "BAD_REQUEST_MANDATE_CANCELLED"],
-    "CUSTOMER_ABANDONED": ["CUSTOMER_DROPPED_OFF"],
+    "CUSTOMER_ABANDONED": ["CUSTOMER_DROPPED_OFF", "CHECKOUT_ABANDONED"],
+    "INVOICE_OVERDUE": ["INVOICE_PAST_DUE"],
+}
+
+#: The four kinds of revenue at risk, and their share of the population.
+#: Payments and subscriptions dominate because that is where most recoverable
+#: money sits; checkout and receivables are smaller but behave differently
+#: enough to be worth modelling separately rather than relabelling a payment.
+SOURCE_TYPES: list[tuple[str, float]] = [
+    ("PAYMENT", 0.46),
+    ("SUBSCRIPTION", 0.30),
+    ("CHECKOUT", 0.14),
+    ("INVOICE", 0.10),
+]
+
+#: An abandoned checkout was never charged, so it has no gateway failure. The
+#: reason is behavioural, and the stage tells you how close they got.
+CHECKOUT_STAGES: list[tuple[str, float]] = [
+    ("CART", 0.34),
+    ("ADDRESS", 0.22),
+    ("PAYMENT_METHOD", 0.28),
+    ("OTP", 0.16),
+]
+
+#: How recoverable an abandonment is, by how far the customer got. Someone who
+#: reached the OTP screen was seconds from paying; someone who left at the cart
+#: may never have intended to.
+CHECKOUT_STAGE_RECOVERY: dict[str, float] = {
+    "CART": 0.18,
+    "ADDRESS": 0.29,
+    "PAYMENT_METHOD": 0.44,
+    "OTP": 0.58,
 }
 
 SEGMENTS: list[tuple[str, float]] = [("STANDARD", 0.62), ("PREMIUM", 0.24), ("ENTERPRISE", 0.14)]
@@ -104,6 +135,11 @@ class SyntheticCase:
     prior_successful_payments: int
     prior_failed_payments: int
     subscription_age_days: int | None
+    #: Receivables only: how far past the due date. The dominant driver of
+    #: whether an invoice ever gets paid.
+    days_overdue: int | None
+    #: Checkout only: how far the customer got before leaving.
+    checkout_stage: str | None
     attempt_number: int
     hour_of_day: int
     day_of_week: int
@@ -134,11 +170,13 @@ def _draw_amount_paise(rng: random.Random, segment: str) -> int:
     """
     # Calibrated so a 120-case demo batch lands in the spec's stated
     # INR 8-12 lakh at-risk band (spec section 17), while keeping the
-    # segment ordering and the long right tail.
+    # segment ordering and the long right tail. Re-tuned downward when B2B
+    # invoices were added: receivables carry a 3-9x multiplier, so the same
+    # base distribution would otherwise put the demo batch at ~21 lakh.
     mu, sigma = {
-        "STANDARD": (7.95, 0.75),
-        "PREMIUM": (8.85, 0.70),
-        "ENTERPRISE": (9.95, 0.85),
+        "STANDARD": (7.40, 0.75),
+        "PREMIUM": (8.30, 0.70),
+        "ENTERPRISE": (9.40, 0.85),
     }[segment]
     rupees = min(max(rng.lognormvariate(mu, sigma), 49.0), 750_000.0)
     return round(rupees * 100)
@@ -211,10 +249,30 @@ def generate(
     cases: list[SyntheticCase] = []
 
     for index in range(count):
-        category = _weighted_choice(rng, category_options)
-        base_rate = FAILURE_PROFILE[category][1]
+        source_type = _weighted_choice(rng, SOURCE_TYPES)
         segment = _weighted_choice(rng, SEGMENTS)
         method = _weighted_choice(rng, PAYMENT_METHODS)
+
+        # Each kind of revenue loss has its own cause, so the failure category
+        # is drawn per source rather than shared. An abandoned checkout has no
+        # gateway error, and an overdue invoice has no failed authorisation.
+        checkout_stage: str | None = None
+        days_overdue: int | None = None
+
+        if source_type == "CHECKOUT":
+            category = "CUSTOMER_ABANDONED"
+            checkout_stage = _weighted_choice(rng, CHECKOUT_STAGES)
+            base_rate = CHECKOUT_STAGE_RECOVERY[checkout_stage]
+        elif source_type == "INVOICE":
+            category = "INVOICE_OVERDUE"
+            # Long-tailed ageing: most invoices are recently due, a few are
+            # badly delinquent and effectively unrecoverable.
+            days_overdue = int(min(rng.expovariate(1 / 28.0), 180))
+            # Collectability decays with age -- the central fact of receivables.
+            base_rate = max(0.62 * (0.985**days_overdue), 0.04)
+        else:
+            category = _weighted_choice(rng, category_options)
+            base_rate = FAILURE_PROFILE[category][1]
 
         # Spread detections back over 30 days so temporal splits are meaningful.
         detected_at = anchor - timedelta(minutes=rng.randint(0, 30 * 24 * 60))
@@ -228,8 +286,12 @@ def generate(
         attempt_number = rng.choices([1, 2, 3, 4, 5], weights=[0.62, 0.18, 0.10, 0.06, 0.04])[0]
         amount = _draw_amount_paise(rng, segment)
 
-        source_type = "SUBSCRIPTION" if rng.random() < 0.38 else "PAYMENT"
         subscription_age = rng.randint(30, 900) if source_type == "SUBSCRIPTION" else None
+
+        # B2B receivables are materially larger than consumer payments, which is
+        # why a single overdue invoice can outweigh a day of failed checkouts.
+        if source_type == "INVOICE":
+            amount = amount * rng.randint(3, 9)
 
         probability = _recovery_probability(
             base_rate,
@@ -267,6 +329,8 @@ def generate(
                 prior_successful_payments=prior_successes,
                 prior_failed_payments=prior_failures,
                 subscription_age_days=subscription_age,
+                days_overdue=days_overdue,
+                checkout_stage=checkout_stage,
                 attempt_number=attempt_number,
                 hour_of_day=detected_at.hour,
                 day_of_week=detected_at.weekday(),

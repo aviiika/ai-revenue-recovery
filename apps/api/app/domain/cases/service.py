@@ -68,6 +68,8 @@ class NewCaseInput:
     attempt_count: int = 0
     payment_method: str | None = None
     subscription_age_days: int | None = None
+    days_overdue: int | None = None
+    checkout_stage: str | None = None
 
 
 def ingest(session: Session, payload: NewCaseInput) -> RecoveryCase:
@@ -99,6 +101,8 @@ def ingest(session: Session, payload: NewCaseInput) -> RecoveryCase:
         failure_reason_code=payload.failure_reason_code,
         payment_method=payload.payment_method,
         subscription_age_days=payload.subscription_age_days,
+        days_overdue=payload.days_overdue,
+        checkout_stage=payload.checkout_stage,
         # Deterministic prior from the reason code. An LLM may later enrich the
         # human-readable explanation, but never overrides this mapping.
         recoverability=CATEGORY_RECOVERABILITY[payload.failure_category],

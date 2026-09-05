@@ -397,3 +397,52 @@ def test_scoring_is_deterministic() -> None:
     assert [s.expected_net.paise for s in scored_for()] == [
         s.expected_net.paise for s in scored_for()
     ]
+
+
+# --- Source-aware candidate strategies --------------------------------------
+
+
+def test_retry_is_not_offered_where_there_is_no_charge_to_retry() -> None:
+    """An abandoned checkout was never charged and an overdue invoice has no
+    failed authorisation behind it. Scoring WAIT_AND_RETRY for either would be
+    costing an action that cannot physically happen."""
+    from app.domain.scoring.service import candidate_strategies
+
+    for source in ("CHECKOUT", "INVOICE"):
+        assert InterventionStrategy.WAIT_AND_RETRY not in candidate_strategies(source)
+        assert InterventionStrategy.CREATE_PAYMENT_LINK in candidate_strategies(source)
+
+    for source in ("PAYMENT", "SUBSCRIPTION"):
+        assert InterventionStrategy.WAIT_AND_RETRY in candidate_strategies(source)
+
+
+def test_scoring_a_checkout_case_never_proposes_a_retry() -> None:
+    scored = score_all(
+        DeterministicScorer(),
+        CaseFeatures(
+            recoverability=Recoverability.ACTIONABLE,
+            failure_category=FailureCategory.CUSTOMER_ABANDONED,
+            amount_at_risk=Money.from_rupees("3000.00"),
+            attempt_count=0,
+            source_type="CHECKOUT",
+            checkout_stage="OTP",
+        ),
+    )
+    assert scored
+    assert all(s.strategy is not InterventionStrategy.WAIT_AND_RETRY for s in scored)
+
+
+def test_scoring_an_invoice_case_never_proposes_a_retry() -> None:
+    scored = score_all(
+        DeterministicScorer(),
+        CaseFeatures(
+            recoverability=Recoverability.ACTIONABLE,
+            failure_category=FailureCategory.INVOICE_OVERDUE,
+            amount_at_risk=Money.from_rupees("85000.00"),
+            attempt_count=0,
+            source_type="INVOICE",
+            days_overdue=32,
+        ),
+    )
+    assert scored
+    assert all(s.strategy is not InterventionStrategy.WAIT_AND_RETRY for s in scored)

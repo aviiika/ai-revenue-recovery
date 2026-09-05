@@ -148,6 +148,8 @@ def seed(
                     attempt_count=max(item.attempt_number - 1, 0),
                     payment_method=item.payment_method,
                     subscription_age_days=item.subscription_age_days,
+                    days_overdue=item.days_overdue,
+                    checkout_stage=item.checkout_stage,
                 ),
             )
         except DuplicateCaseError:

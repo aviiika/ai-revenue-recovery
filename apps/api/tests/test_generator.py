@@ -98,3 +98,73 @@ def test_generate_rejects_non_positive_count() -> None:
 
     with pytest.raises(ValueError, match="positive"):
         generate(count=0)
+
+
+# --- Checkout abandonment and B2B receivables -------------------------------
+
+
+def test_all_four_revenue_loss_types_are_generated() -> None:
+    """The brief names payment, checkout, subscription and receivables. An enum
+    value with no data behind it is a claim the product does not back."""
+    cases = generate(count=2000)
+    sources = {case.source_type for case in cases}
+    assert sources == {"PAYMENT", "SUBSCRIPTION", "CHECKOUT", "INVOICE"}
+
+
+def test_checkout_cases_have_a_stage_and_no_gateway_error() -> None:
+    """An abandoned checkout was never charged, so there is no failure code to
+    diagnose -- only how far the customer got."""
+    checkouts = [c for c in generate(count=1500) if c.source_type == "CHECKOUT"]
+    assert checkouts
+
+    for case in checkouts:
+        assert case.failure_category == "CUSTOMER_ABANDONED"
+        assert case.checkout_stage in {"CART", "ADDRESS", "PAYMENT_METHOD", "OTP"}
+        assert case.days_overdue is None
+
+
+def test_recovery_rises_with_checkout_progress() -> None:
+    """Someone who reached the OTP screen was seconds from paying; someone who
+    left at the cart may never have intended to. If the model cannot see that
+    difference, checkout recovery is guesswork."""
+    checkouts = [c for c in generate(count=6000) if c.source_type == "CHECKOUT"]
+    rates = {}
+    for stage in ("CART", "ADDRESS", "PAYMENT_METHOD", "OTP"):
+        group = [c for c in checkouts if c.checkout_stage == stage]
+        assert len(group) >= 30
+        rates[stage] = sum(c.recovered for c in group) / len(group)
+
+    assert rates["CART"] < rates["ADDRESS"] < rates["PAYMENT_METHOD"] < rates["OTP"]
+
+
+def test_invoice_cases_are_overdue_receivables() -> None:
+    invoices = [c for c in generate(count=1500) if c.source_type == "INVOICE"]
+    assert invoices
+
+    for case in invoices:
+        assert case.failure_category == "INVOICE_OVERDUE"
+        assert case.days_overdue is not None and case.days_overdue >= 0
+        assert case.checkout_stage is None
+
+
+def test_invoice_collectability_decays_with_age() -> None:
+    """The central fact of receivables: the longer it is outstanding, the less
+    likely it is ever collected."""
+    invoices = [c for c in generate(count=6000) if c.source_type == "INVOICE"]
+    fresh = [c for c in invoices if (c.days_overdue or 0) <= 14]
+    stale = [c for c in invoices if (c.days_overdue or 0) >= 60]
+
+    assert len(fresh) >= 30 and len(stale) >= 20
+    fresh_rate = sum(c.recovered for c in fresh) / len(fresh)
+    stale_rate = sum(c.recovered for c in stale) / len(stale)
+    assert fresh_rate > stale_rate
+
+
+def test_invoices_are_materially_larger_than_consumer_payments() -> None:
+    """B2B receivables are where a single case can outweigh a day of checkouts,
+    which is what makes value-weighted prioritisation matter."""
+    cases = generate(count=3000)
+    invoices = [c.amount_at_risk_paise for c in cases if c.source_type == "INVOICE"]
+    payments = [c.amount_at_risk_paise for c in cases if c.source_type == "PAYMENT"]
+
+    assert sum(invoices) / len(invoices) > 3 * (sum(payments) / len(payments))

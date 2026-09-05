@@ -48,6 +48,8 @@ def _to_context(features: CaseFeatures) -> ScoringContext:
         prior_successful_payments=features.prior_successful_payments,
         prior_failed_payments=features.prior_failed_payments,
         subscription_age_days=features.subscription_age_days,
+        days_overdue=features.days_overdue,
+        checkout_stage=features.checkout_stage,
     )
 
 
