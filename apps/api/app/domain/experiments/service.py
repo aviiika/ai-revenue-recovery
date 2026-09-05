@@ -65,9 +65,17 @@ class IncrementalResult:
 
     treatment: ArmResult
     holdout: ArmResult
-    #: Percentage-point difference in recovery rate between arms.
+    #: Percentage-point difference in the *count* recovery rate between arms.
+    #:
+    #: This is the primary causal estimate. See :func:`incremental_recovery` for
+    #: why the count rate leads and the value rate does not.
     incremental_rate_points: float
-    #: That difference applied to the treated population's value at risk.
+    #: The same difference computed on value-weighted rates. Reported for
+    #: transparency, but it is a ratio-of-sums estimator over a heavy-tailed
+    #: amount distribution, so at demo sample sizes its variance is large enough
+    #: to flip its sign. Never quote it alone.
+    incremental_rate_points_by_value: float
+    #: The count-rate difference applied to the treated population's value at risk.
     incremental_value: SignedMoney
     net_incremental_value: SignedMoney
     holdout_share: float
@@ -167,17 +175,36 @@ def incremental_recovery(session: Session, merchant_id: uuid.UUID) -> Incrementa
     treatment = arm_result(session, merchant_id, ExperimentArm.TREATMENT, restrict_to=eligible)
     holdout = arm_result(session, merchant_id, ExperimentArm.HOLDOUT, restrict_to=eligible)
 
-    lift = treatment.recovery_rate_by_value - holdout.recovery_rate_by_value
+    # The causal effect is estimated on the *count* rate, then monetised.
+    #
+    # The value-weighted rate is recovered_amount / at_risk -- a ratio of sums.
+    # Case amounts here are heavy-tailed by design (a B2B invoice is 3-9x a
+    # consumer payment), so at demo sample sizes a single large case settling
+    # one way moves that ratio by tens of percentage points and can invert its
+    # sign. Observed directly: on an 83-case holdout the count rates were 45.7%
+    # treated against 26.5% withheld (+19.2pp), while the value rates read
+    # 32.0% against 54.8% (-22.8pp) because a handful of large withheld cases
+    # recovered spontaneously.
+    #
+    # The count difference is the treatment effect on the probability that a
+    # case recovers. Applying it to the treated arm's value at risk converts
+    # that effect into money without inheriting the ratio estimator's variance.
+    lift = treatment.recovery_rate_by_count - holdout.recovery_rate_by_count
+    lift_by_value = treatment.recovery_rate_by_value - holdout.recovery_rate_by_value
     incremental_paise = round(treatment.at_risk.paise * lift)
     incremental = SignedMoney(incremental_paise)
     net = incremental - SignedMoney.of(treatment.spend)
 
     total_cases = treatment.cases + holdout.cases
     caveat = (
-        "Incremental recovery is the difference in recovery rate between the "
-        "randomised treatment and holdout arms, restricted on both sides to "
-        "cases the agent intended to act on. It is measured within a synthetic "
-        "simulation, on a small sample, and carries no confidence interval; it "
+        "Incremental recovery is the difference in the share of cases recovered "
+        "between the randomised treatment and holdout arms, restricted on both "
+        "sides to cases the agent intended to act on, then applied to the "
+        "treated arm's value at risk. The value-weighted difference is shown "
+        "separately because case amounts are heavy-tailed: at this sample size "
+        "one large case can move it by tens of percentage points, so it is not "
+        "a reliable causal estimate on its own. Everything here is measured "
+        "within a synthetic simulation and carries no confidence interval; it "
         "is not evidence of real-world production uplift."
     )
     if holdout.cases < 20:
@@ -190,6 +217,7 @@ def incremental_recovery(session: Session, merchant_id: uuid.UUID) -> Incrementa
         treatment=treatment,
         holdout=holdout,
         incremental_rate_points=round(lift * 100, 2),
+        incremental_rate_points_by_value=round(lift_by_value * 100, 2),
         incremental_value=incremental,
         net_incremental_value=net,
         holdout_share=round(holdout.cases / total_cases, 4) if total_cases else 0.0,
@@ -352,6 +380,7 @@ def comparison_report(session: Session, merchant_id: uuid.UUID) -> dict[str, obj
             "treatment": _arm_dict(incremental.treatment),
             "holdout": _arm_dict(incremental.holdout),
             "incremental_rate_points": incremental.incremental_rate_points,
+            "incremental_rate_points_by_value": incremental.incremental_rate_points_by_value,
             "incremental_value_paise": incremental.incremental_value.paise,
             "net_incremental_value_paise": incremental.net_incremental_value.paise,
             "holdout_share": incremental.holdout_share,

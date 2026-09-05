@@ -31,6 +31,9 @@ and is fully auditable, end to end.**
 | Model card, leakage guards, graceful degradation | Done |
 | Overview + intervention metrics endpoints | Done |
 | Dashboard: overview, case table, case detail + audit timeline, model page | Done |
+| Payment Link execution from the dashboard, with simulated/live labelling | Done |
+| Incremental impact screen: holdout arms, agent vs baseline, caveats | Done |
+| Integration health strip: which execution path the demo is on | Done |
 | Interventions with DB-enforced idempotency and execution-time re-checks | Done |
 | Deterministic simulator, randomised holdout, incremental measurement | Done |
 | Agent vs baseline comparison; Celery worker wrapping the orchestrator | Done |
@@ -41,7 +44,7 @@ and is fully auditable, end to end.**
 | End-to-end demo test, demo script, API reference | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 239 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| 260 backend + 7 frontend tests, ruff clean, mypy strict clean, builds clean | Done |
 | **All seven milestones complete** | — |
 
 ---
@@ -185,6 +188,14 @@ Lint and typecheck:
 cd apps/api && .venv/Scripts/python.exe -m ruff check app tests ../../ml && .venv/Scripts/python.exe -m mypy app
 ```
 
+Frontend tests, lint, typecheck and build:
+
+```bash
+cd apps/web && npm test && npx eslint src --max-warnings=0 && npx tsc --noEmit && npx next build
+```
+
+CI runs all of the above on every push.
+
 ## Running the dashboard
 
 With the API running, in a second terminal:
@@ -193,7 +204,7 @@ With the API running, in a second terminal:
 cd apps/web && npm install && npm run dev
 ```
 
-Then open <http://localhost:3000>. Three screens:
+Then open <http://localhost:3000>. Six screens:
 
 - **Overview** — KPI cards, recovery funnel, revenue at risk by failure reason,
   detected-vs-recovered over time. Buttons to seed data and run the agent.
@@ -202,6 +213,14 @@ Then open <http://localhost:3000>. Three screens:
 - **Case detail** — financial context, model assessment, operator actions, and
   the complete append-only audit timeline.
 - **Model metrics** — the training report, including calibration.
+- **Incremental impact** — the randomised holdout arms side by side, the causal
+  lift, the agent-versus-baseline comparison, and the caveats that belong with
+  them. This is the page that answers "would they have paid anyway?".
+- **Policies** — merchant thresholds, editable and validated server-side.
+
+The Overview also carries an execution-path strip reading either
+`SIMULATED EXECUTION` or `RAZORPAY TEST MODE`, so nobody has to guess which path
+a demo is on.
 
 The frontend performs no money arithmetic and holds no policy logic. Amounts
 arrive pre-formatted from the backend, and every state, rule and probability the
@@ -252,6 +271,49 @@ acknowledged with a 200 — refusing it would make Razorpay retry for 24 hours.
 For local delivery you need a public HTTPS URL. Follow Razorpay's current
 guidance on tunnelling rather than assuming a particular tunnel domain works.
 
+### Creating a Payment Link from the dashboard
+
+This is the flow judges should see. It works with or without credentials, and
+the UI says which path it took rather than making you infer it.
+
+1. Open a case whose policy decision is `CREATE_PAYMENT_LINK`. The **Operator
+   actions** panel shows the selected intervention and its expected net
+   recovery; the button appears only when policy actually authorised that
+   action.
+2. Press **Create Razorpay Payment Link**.
+3. A **Razorpay Payment Link** panel appears, badged either `RAZORPAY TEST MODE`
+   with an **Open Payment Link** button, or `SIMULATED` with an explanation and
+   no link. A URL is only ever rendered when the provider returned one — the
+   app never constructs a payment URL itself.
+4. The case moves to `OBSERVING` and recovered revenue stays at ₹0. **Creating a
+   link is not a recovery.** The panel says so.
+5. Pay the link in Razorpay test mode, or post a signed `payment_link.paid`
+   webhook. Only then does the case become `RECOVERED`, the amount count toward
+   revenue recovered, and `RECOVERY_RECORDED` appear on the audit timeline.
+
+The link's `reference_id` carries the intervention's idempotency key, which is
+how a payment ties back to the exact attempt that created it. Pressing the
+button twice cannot create a second link: the key has a UNIQUE constraint.
+
+If policy refuses — a cooldown, an escalation, an already-recovered case — the
+panel reports the engine's own explanation and decisive rule ID instead of a
+generic failure. A refusal and a provider error are shown differently, because
+they mean opposite things.
+
+### Preparing a fresh case for this demo
+
+Running the full cycle puts every case into its 24-hour cooldown, so there may
+be nothing left to execute. Ingest a purpose-made case:
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/cases/batch -H "Content-Type: application/json" -d "{\"cases\":[{\"source_type\":\"SUBSCRIPTION\",\"source_external_id\":\"demo_paylink_001\",\"amount_at_risk_paise\":2928835,\"detected_at\":\"2026-09-05T06:00:00Z\",\"failure_category\":\"INSUFFICIENT_FUNDS\",\"failure_reason_code\":\"BAD_REQUEST_ERROR\",\"is_synthetic\":true,\"attempt_count\":0}]}"
+```
+
+Find it in the case table, press **Re-evaluate with policy engine**, and it
+lands on `ACTION_SELECTED` / `CREATE_PAYMENT_LINK`. Change
+`source_external_id` each time — ingestion is idempotent and will report a
+duplicate otherwise.
+
 ## Training the model
 
 ```bash
@@ -276,7 +338,7 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 
 ---
 
-## API surface (Slice 1)
+## API surface
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -285,6 +347,7 @@ apps/api/.venv/Scripts/python.exe -m ml.src.generate_data --count 1000 --summary
 | `GET` | `/api/v1/cases/{id}` | Case detail with audit trail and legal transitions |
 | `POST` | `/api/v1/cases/batch` | Idempotent batch ingestion |
 | `POST` | `/api/v1/cases/{id}/evaluate` | Run diagnose → score → policy on one case |
+| `POST` | `/api/v1/cases/{id}/execute` | Execute the selected intervention; creates the Payment Link |
 | `POST` | `/api/v1/cases/{id}/stop` | Operator kill switch |
 | `POST` | `/api/v1/cases/evaluate-batch` | Run the agent across all pending cases |
 | `GET` | `/api/v1/metrics/overview` | KPIs, funnel, failure reasons, time series |
@@ -349,29 +412,42 @@ These are not stylistic preferences; they are checked by tests.
 
 ## Measured results
 
-From an actual run on seed `20260902`, 120 synthetic cases. Reproducible — the
-same seed gives the same figures.
+From an actual run on seed `20260902`, 600 synthetic cases, measured through the
+API rather than transcribed by hand. The same seed gives the same population.
 
 | | |
 |---|---|
-| Revenue at risk | ₹8,98,632 |
-| Revenue recovered (gross) | ₹2,65,231 — 29.5% by value |
-| **Incremental recovery (holdout-measured)** | **+12.8 pp, ≈ ₹50,500** |
-| Cases recovered / escalated / stopped | 35 / 38 / 27 |
-| Agent actions vs naive baseline | 57 vs 115 — **50% fewer contacts** |
-| Awaiting human review | 38 cases worth ₹2,90,061 |
+| Revenue at risk | ₹47,24,978.30 |
+| Revenue recovered (gross) | ₹12,38,986.52 — 26.2% by value |
+| **Incremental recovery (holdout-measured)** | **+19.2 pp, ₹4,44,582.44** |
+| Net of intervention spend | ₹4,43,345.94 |
+| Holdout arm | 83 cases, **zero** actions executed against it |
+| Cases recovered / escalated / stopped | 173 / 193 / 88 |
+| Agent actions vs naive baseline | 249 fewer interventions |
 
 **Read the incremental figure, not the gross one.** Gross recovery includes
-customers who would have paid anyway; 20% of cases are randomised into a holdout
-that is never contacted, and the gap between arms is what the agent actually
-caused. On 120 cases the holdout is only 27, so that number moves between runs —
-a 400-case batch lands nearer +40 pp. It is measured inside a simulation and
-carries no confidence interval.
+customers who would have paid anyway. Twenty percent of cases are randomised
+into a holdout that is never contacted, and the gap between arms is what the
+agent actually caused.
+
+**Two estimators, and why the count-based one leads.** The incremental figure is
+the difference in the *share of cases recovered* between arms — 45.7% treated
+against 26.5% withheld. The value-weighted difference on the same run reads
+−22.8 pp, and the dashboard shows it saying so. That is not a contradiction: the
+value rate is a ratio of sums, case amounts are heavy-tailed by design (a B2B
+invoice runs 3–9× a consumer payment), and a handful of large withheld cases
+settling one way moves it by tens of points. The count difference measures the
+effect on whether a case recovers at all, and is what gets monetised against the
+treated arm's value at risk. Both are on the Incremental impact screen with the
+caveat attached; neither is quoted alone.
+
+Everything above is measured inside a simulation and carries no confidence
+interval. It is not evidence of real-world uplift.
 
 **The agent scores below the baseline on raw expected value**, and we have not
-tuned the cost assumptions to hide that. At ₹5 per message against an ₹8,600
+tuned the cost assumptions to hide that. At ₹5 per message against a four-figure
 ticket, contacting everyone is arithmetically optimal. What the agent buys is
-half the customer contacts, human oversight on every low-confidence decision,
+249 fewer customer contacts, human oversight on every low-confidence decision,
 and guardrails that hold.
 
 See [`docs/demo-script.md`](docs/demo-script.md) for the 4-minute walkthrough
@@ -382,10 +458,17 @@ and [`docs/api.md`](docs/api.md) for the endpoint reference.
 All seven milestones from the spec are complete. Natural next steps, none
 started:
 
-1. **Authentication** — reviewer identity is currently self-asserted
-2. **Power-analysed holdout** — the 20% share is fixed, not sized
-3. **Per-strategy response modelling** — needs counterfactual outcome data
-4. **Deployment** — no hosting is configured
+1. **A live Razorpay call** — the adapter is exercised against a mock
+   transport running the real client code, but no request has yet reached
+   Razorpay's servers. Add test-mode keys to close this.
+2. **Authentication** — reviewer identity is currently self-asserted
+3. **Power-analysed holdout** — the 20% share is fixed, not sized. At 600 cases
+   the holdout is 83, which is enough for the count-based estimate and still
+   not enough for the value-weighted one
+4. **A `ModelPrediction` table** — prediction history currently lives in
+   `CASE_SCORED` audit payloads, which is auditable but not queryable for drift
+5. **Per-strategy response modelling** — needs counterfactual outcome data
+6. **Deployment** — no hosting is configured
 
 ## Licence and data
 

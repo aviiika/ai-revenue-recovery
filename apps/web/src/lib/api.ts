@@ -238,6 +238,68 @@ export interface OverviewMetrics {
   }[];
 }
 
+export interface IntegrationHealth {
+  razorpay: {
+    mode: string;
+    api_configured: boolean;
+    webhook_secret_configured: boolean;
+    webhook_path: string;
+    live_mode_blocked: boolean;
+    note: string;
+  };
+  llm: { configured: boolean; provider: string };
+  demo_endpoints_enabled: boolean;
+}
+
+/** One arm of the randomised holdout experiment. */
+export interface ArmResult {
+  arm: string;
+  cases: number;
+  recovered: number;
+  at_risk_paise: number;
+  recovered_paise: number;
+  executed_actions: number;
+  spend_paise: number;
+  recovery_rate_by_count: number;
+  recovery_rate_by_value: number;
+}
+
+export interface PolicyComparison {
+  policy: string;
+  cases: number;
+  actions: number;
+  contacts: number;
+  expected_recovered_paise: number;
+  spend_paise: number;
+  expected_net_paise: number;
+  actions_per_case: number;
+}
+
+export interface ExperimentReport {
+  available: boolean;
+  message?: string;
+  synthetic?: boolean;
+  policies?: Record<string, PolicyComparison>;
+  agent_vs_baseline?: {
+    expected_net_delta_paise: number;
+    action_delta: number;
+    net_uplift_pct: number;
+    fewer_actions_pct: number;
+  };
+  incremental?: {
+    treatment: ArmResult;
+    holdout: ArmResult;
+    incremental_rate_points: number;
+    incremental_rate_points_by_value: number;
+    incremental_value_paise: number;
+    net_incremental_value_paise: number;
+    holdout_share: number;
+    caveat: string;
+  };
+  spontaneous_recovery_note?: string;
+  assumed_spontaneous_rate?: Record<string, string>;
+}
+
 export interface ModelReport {
   trained: boolean;
   synthetic?: boolean;
@@ -401,6 +463,11 @@ export const api = {
     }>("/api/v1/metrics/interventions"),
 
   modelMetrics: () => request<ModelReport>("/api/v1/metrics/models"),
+
+  experiments: () => request<ExperimentReport>("/api/v1/metrics/experiments"),
+
+  integrationHealth: () =>
+    request<IntegrationHealth>("/api/v1/integrations/health"),
 
   listReviews: (status: ReviewStatus = "PENDING") =>
     request<ReviewListResponse>(`/api/v1/reviews?status=${status}`),

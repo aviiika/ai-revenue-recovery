@@ -14,6 +14,7 @@ const NAV = [
   { href: "/cases", label: "Recovery cases" },
   { href: "/reviews", label: "Review queue" },
   { href: "/model", label: "Model metrics" },
+  { href: "/experiments", label: "Incremental impact" },
   { href: "/policies", label: "Policies" },
 ];
 

@@ -15,7 +15,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { api, type OverviewMetrics } from "@/lib/api";
+import {
+  api,
+  type IntegrationHealth,
+  type OverviewMetrics,
+} from "@/lib/api";
 import {
   EmptyState,
   ErrorState,
@@ -40,6 +44,13 @@ export default function OverviewPage() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["overview"],
     queryFn: api.overview,
+  });
+
+  // Which execution path the demo is actually on. Rendered as its own strip so
+  // nobody has to infer from a case whether Razorpay is live or simulated.
+  const integrations = useQuery({
+    queryKey: ["integration-health"],
+    queryFn: api.integrationHealth,
   });
 
   const seed = useMutation({
@@ -118,6 +129,10 @@ export default function OverviewPage() {
       </PageHeading>
 
       {data.synthetic ? <SyntheticBanner /> : null}
+
+      {integrations.data ? (
+        <IntegrationStrip health={integrations.data} />
+      ) : null}
 
       {runAgent.data ? (
         <div className="rounded-md border border-[var(--color-progress-border)] bg-[var(--color-progress-surface)] px-3 py-2 text-xs text-[var(--color-ink-secondary)]">
@@ -384,6 +399,47 @@ function StateTable({ data }: { data: OverviewMetrics }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * Execution-path banner.
+ *
+ * The single fact a presenter needs before clicking anything: is this creating
+ * real Razorpay test-mode links, or running through the simulator? Getting this
+ * wrong mid-demo is worse than not showing it at all, so it reports the
+ * server's own configuration flags and never guesses.
+ */
+function IntegrationStrip({ health }: { health: IntegrationHealth }) {
+  const live = health.razorpay.api_configured;
+  return (
+    <div
+      className={
+        live
+          ? "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--color-progress-border)] bg-[var(--color-progress-surface)] px-3 py-2 text-2xs"
+          : "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-sunken)] px-3 py-2 text-2xs"
+      }
+    >
+      <span
+        className={
+          live
+            ? "font-semibold text-[var(--color-progress)]"
+            : "font-semibold text-[var(--color-ink-secondary)]"
+        }
+      >
+        {live ? "RAZORPAY TEST MODE" : "SIMULATED EXECUTION"}
+      </span>
+      <span className="text-[var(--color-ink-secondary)]">
+        {live
+          ? "Payment links are created against Razorpay's test API."
+          : "No Razorpay credentials configured — the agent executes through the simulator."}
+      </span>
+      <span className="text-[var(--color-ink-muted)]">
+        webhook secret {health.razorpay.webhook_secret_configured ? "set" : "not set"}
+        {" · "}
+        LLM {health.llm.configured ? health.llm.provider : "template fallback"}
+      </span>
     </div>
   );
 }

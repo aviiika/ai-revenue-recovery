@@ -59,9 +59,15 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
     data.current_state,
   );
   const selected = data.selected_strategy;
+  // An action already executed and awaiting its outcome. Offering the button
+  // here would only produce a cooldown refusal, so the UI says what the case is
+  // waiting for instead of inviting a click that cannot succeed.
+  const actionInFlight = ["ACTION_PENDING", "ACTION_EXECUTED", "OBSERVING"].includes(
+    data.current_state,
+  );
   // Execution is offered only where policy has chosen an action and the case is
   // still live. An already-recovered case must never get a second link.
-  const canExecute = Boolean(selected) && !isTerminal;
+  const canExecute = Boolean(selected) && !isTerminal && !actionInFlight;
   // The most recent attempt that actually produced a provider result.
   const paymentLink =
     [...data.interventions]
@@ -239,6 +245,14 @@ export function CaseDetailView({ caseId }: { caseId: string }) {
                       ? "Create Razorpay Payment Link"
                       : `Execute ${selected?.replace(/_/g, " ").toLowerCase()}`}
                 </button>
+              ) : null}
+
+              {actionInFlight && !isTerminal ? (
+                <p className="rounded border border-dashed border-[var(--color-border-strong)] px-2.5 py-2 text-2xs text-[var(--color-ink-secondary)]">
+                  An intervention has been executed and this case is awaiting
+                  the customer&apos;s response. It becomes eligible again once
+                  the outcome is observed or the cooldown expires.
+                </p>
               ) : null}
 
               <button
