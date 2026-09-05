@@ -38,10 +38,11 @@ and is fully auditable, end to end.**
 | Human review queue: approve / override / reject, fully audited | Done |
 | Policy settings API and screen, validated not clamped | Done |
 | LLM explanations with structured output and template fallback | Done |
+| End-to-end demo test, demo script, API reference | Done |
 | Evaluate / stop / evaluate-batch endpoints | Done |
 | PostgreSQL schema + Alembic migration | Done |
-| 233 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
-| Demo hardening: E2E test, demo script, final metrics | Not yet — see [Roadmap](#roadmap) |
+| 239 tests, ruff clean, mypy strict clean, frontend builds clean | Done |
+| **All seven milestones complete** | — |
 
 ---
 
@@ -346,11 +347,45 @@ These are not stylistic preferences; they are checked by tests.
   the policy engine decides.
 - **Synthetic data is labelled everywhere** it appears, including in API responses.
 
+## Measured results
+
+From an actual run on seed `20260902`, 120 synthetic cases. Reproducible — the
+same seed gives the same figures.
+
+| | |
+|---|---|
+| Revenue at risk | ₹8,98,632 |
+| Revenue recovered (gross) | ₹2,65,231 — 29.5% by value |
+| **Incremental recovery (holdout-measured)** | **+12.8 pp, ≈ ₹50,500** |
+| Cases recovered / escalated / stopped | 35 / 38 / 27 |
+| Agent actions vs naive baseline | 57 vs 115 — **50% fewer contacts** |
+| Awaiting human review | 38 cases worth ₹2,90,061 |
+
+**Read the incremental figure, not the gross one.** Gross recovery includes
+customers who would have paid anyway; 20% of cases are randomised into a holdout
+that is never contacted, and the gap between arms is what the agent actually
+caused. On 120 cases the holdout is only 27, so that number moves between runs —
+a 400-case batch lands nearer +40 pp. It is measured inside a simulation and
+carries no confidence interval.
+
+**The agent scores below the baseline on raw expected value**, and we have not
+tuned the cost assumptions to hide that. At ₹5 per message against an ₹8,600
+ticket, contacting everyone is arithmetically optimal. What the agent buys is
+half the customer contacts, human oversight on every low-confidence decision,
+and guardrails that hold.
+
+See [`docs/demo-script.md`](docs/demo-script.md) for the 4-minute walkthrough
+and [`docs/api.md`](docs/api.md) for the endpoint reference.
+
 ## Roadmap
 
-Slice 1 is done. Remaining milestones, in order:
+All seven milestones from the spec are complete. Natural next steps, none
+started:
 
-1. **Demo hardening** — end-to-end tests, demo script, final metrics
+1. **Authentication** — reviewer identity is currently self-asserted
+2. **Power-analysed holdout** — the 20% share is fixed, not sized
+3. **Per-strategy response modelling** — needs counterfactual outcome data
+4. **Deployment** — no hosting is configured
 
 ## Licence and data
 
