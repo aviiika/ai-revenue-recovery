@@ -303,16 +303,33 @@ they mean opposite things.
 ### Preparing a fresh case for this demo
 
 Running the full cycle puts every case into its 24-hour cooldown, so there may
-be nothing left to execute. Ingest a purpose-made case:
+be nothing left to execute. Two helper commands mint a case and settle it,
+which avoids hand-escaping JSON and hand-computing an HMAC signature in front
+of an audience. Run both from `apps/api`:
 
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/cases/batch -H "Content-Type: application/json" -d "{\"cases\":[{\"source_type\":\"SUBSCRIPTION\",\"source_external_id\":\"demo_paylink_001\",\"amount_at_risk_paise\":2928835,\"detected_at\":\"2026-09-05T06:00:00Z\",\"failure_category\":\"INSUFFICIENT_FUNDS\",\"failure_reason_code\":\"BAD_REQUEST_ERROR\",\"is_synthetic\":true,\"attempt_count\":0}]}"
+.venv\Scripts\python.exe -m scripts.demo new demo_paylink_004
 ```
 
-Find it in the case table, press **Re-evaluate with policy engine**, and it
-lands on `ACTION_SELECTED` / `CREATE_PAYMENT_LINK`. Change
-`source_external_id` each time — ingestion is idempotent and will report a
-duplicate otherwise.
+That ingests the case, evaluates it, and prints its dashboard URL along with the
+strategy policy chose. Press **Create Razorpay Payment Link** on that page, then:
+
+```bash
+.venv\Scripts\python.exe -m scripts.demo pay demo_paylink_004
+```
+
+`pay` signs a `payment_link.paid` webhook with `RAZORPAY_WEBHOOK_SECRET` and
+posts it to the same endpoint Razorpay would, so the case settles through the
+real verification path. It refuses if no intervention exists yet — a payment
+cannot arrive for an attempt that was never made.
+
+Use a new id each time; ingestion is idempotent and reports a duplicate rather
+than creating a second case. With real credentials configured you can pay the
+link in Razorpay's test mode instead and skip `pay` entirely.
+
+> These commands are PowerShell. In PowerShell `curl` is an alias for
+> `Invoke-WebRequest` and will not accept curl's flags — if you prefer raw HTTP,
+> call `curl.exe` explicitly.
 
 ## Training the model
 
